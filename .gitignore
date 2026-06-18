@@ -1,0 +1,12 @@
+.DS_Store
+.env
+README.md
+memory.md
+__pycache__/
+*.py[cod]
+
+benchmarks/*
+!benchmarks/.gitkeep
+
+*.log
+*.tmp
