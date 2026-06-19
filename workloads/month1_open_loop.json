@@ -1,0 +1,52 @@
+{
+  "description": "Open-loop arrival-rate sweep for a Llama 3.1 8B FP8 vLLM endpoint.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "runs": [
+    {
+      "name": "open_loop_rps5_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 5,
+      "request_count": 100,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "open_loop_rps10_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 10,
+      "request_count": 200,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "open_loop_rps20_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 20,
+      "request_count": 400,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "open_loop_rps30_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 30,
+      "request_count": 600,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    }
+  ]
+}

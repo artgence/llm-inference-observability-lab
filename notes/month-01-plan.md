@@ -43,6 +43,14 @@ Run the benchmark:
 python3 scripts/benchmark_vllm.py --workload workloads/month1_baseline.json
 ```
 
+Run the open-loop arrival-rate sweep:
+
+```bash
+python3 scripts/benchmark_vllm.py --workload workloads/month1_open_loop.json
+```
+
+The open-loop workload schedules 5, 10, 20, and 30 RPS independently of completions. Compare the target rate with `achieved_request_start_rate_rps`, and reject a run as load-generator-limited if `scheduler_delay_p95_s` is material.
+
 Scrape vLLM metrics before or after a benchmark:
 
 ```bash

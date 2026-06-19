@@ -30,7 +30,7 @@ Record the exact expanded command and any deviations here. For full native Llama
 
 ## Workload
 
-Workload file: `workloads/month1_baseline.json`
+Workload files: `workloads/month1_baseline.json` and `workloads/month1_open_loop.json`
 
 The baseline workload uses the model's standard instruct chat template with deterministic sampling so TTFT, TPOT, and output length are easier to compare across runs.
 
@@ -38,6 +38,21 @@ The baseline workload uses the model's standard instruct chat template with dete
 | --- | ---: | ---: | ---: | ---: |
 | smoke_c1_prompt256_out128 | 5 | 1 | 256 | 128 |
 | baseline_c4_prompt512_out128 | 20 | 4 | 512 | 128 |
+| baseline_c8_prompt512_out128 | 40 | 8 | 512 | 128 |
+| baseline_c16_prompt512_out128 | 80 | 16 | 512 | 128 |
+| baseline_c32_prompt512_out128 | 160 | 32 | 512 | 128 |
+| baseline_c48_prompt512_out128 | 240 | 48 | 512 | 128 |
+| baseline_c64_prompt512_out128 | 320 | 64 | 512 | 128 |
+| baseline_c96_prompt512_out128 | 480 | 96 | 512 | 128 |
+
+| Open-Loop Workload | Requests | Target RPS | Duration | Max In Flight |
+| --- | ---: | ---: | ---: | ---: |
+| open_loop_rps5_prompt512_out128 | 100 | 5 | 20s | 256 |
+| open_loop_rps10_prompt512_out128 | 200 | 10 | 20s | 256 |
+| open_loop_rps20_prompt512_out128 | 400 | 20 | 20s | 256 |
+| open_loop_rps30_prompt512_out128 | 600 | 30 | 20s | 256 |
+
+Report target and achieved request start rates, completion throughput, scheduler delay, latency, and errors separately for the open-loop stages.
 
 ## Results
 

@@ -180,16 +180,39 @@ def post_streaming_chat(
     model: str,
     workload: dict[str, Any],
     request_index: int,
+    workload_started_perf: float | None = None,
+    scheduled_offset_s: float | None = None,
 ) -> dict[str, Any]:
     prompt = workload.get("prompt") or generated_prompt(int(workload.get("prompt_words", 256)), request_index)
     timeout = float(workload.get("timeout_seconds", 120))
     started_perf = time.perf_counter()
     started_at = utc_now()
+    request_start_offset_s = (
+        started_perf - workload_started_perf if workload_started_perf is not None else None
+    )
+    scheduler_delay_s = (
+        max(0.0, request_start_offset_s - scheduled_offset_s)
+        if request_start_offset_s is not None and scheduled_offset_s is not None
+        else None
+    )
     ttft_s: float | None = None
     token_event_times: list[float] = []
     content_parts: list[str] = []
     usage: dict[str, Any] = {}
     status_code: int | None = None
+
+    def scheduling_fields(ended_perf: float) -> dict[str, float | None]:
+        scheduled_latency_s = (
+            ended_perf - workload_started_perf - scheduled_offset_s
+            if workload_started_perf is not None and scheduled_offset_s is not None
+            else None
+        )
+        return {
+            "scheduled_offset_s": scheduled_offset_s,
+            "request_start_offset_s": request_start_offset_s,
+            "scheduler_delay_s": scheduler_delay_s,
+            "scheduled_latency_s": scheduled_latency_s,
+        }
 
     payload: dict[str, Any] = {
         "model": model,
@@ -251,6 +274,7 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": body[:1000],
             "latency_s": ended_perf - started_perf,
+            **scheduling_fields(ended_perf),
             "timeout": error_type == "timeout",
             "oom": error_type == "oom",
             "rejected": error_type == "rejected",
@@ -268,6 +292,7 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": message[:1000],
             "latency_s": ended_perf - started_perf,
+            **scheduling_fields(ended_perf),
             "timeout": error_type == "timeout",
             "oom": error_type == "oom",
             "rejected": error_type == "rejected",
@@ -285,6 +310,7 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": message[:1000],
             "latency_s": ended_perf - started_perf,
+            **scheduling_fields(ended_perf),
             "timeout": error_type == "timeout",
             "oom": error_type == "oom",
             "rejected": error_type == "rejected",
@@ -326,6 +352,7 @@ def post_streaming_chat(
         "success": True,
         "status_code": status_code,
         "latency_s": ended_perf - started_perf,
+        **scheduling_fields(ended_perf),
         "ttft_s": ttft_s,
         "tpot_s": tpot_s,
         "inter_token_latency_s": inter_token_latency_s,
@@ -364,6 +391,7 @@ def load_gpu_summary(gpu_path: Path) -> dict[str, float | None]:
 
 def summarize_workload(
     workload_name: str,
+    workload: dict[str, Any],
     results: list[dict[str, Any]],
     wall_time_s: float,
     gpu_summary: dict[str, float | None],
@@ -374,11 +402,38 @@ def summarize_workload(
     tpots = [float(row["tpot_s"]) for row in successes if row.get("tpot_s") is not None]
     output_tokens = sum(int(row.get("output_tokens") or 0) for row in successes)
     total_tokens = sum(int(row.get("total_tokens") or 0) for row in successes)
+    scheduler_delays = [
+        float(row["scheduler_delay_s"])
+        for row in results
+        if row.get("scheduler_delay_s") is not None
+    ]
+    scheduled_latencies = [
+        float(row["scheduled_latency_s"])
+        for row in successes
+        if row.get("scheduled_latency_s") is not None
+    ]
+    request_start_offsets = [
+        float(row["request_start_offset_s"])
+        for row in results
+        if row.get("request_start_offset_s") is not None
+    ]
     request_count = len(results)
     success_count = len(successes)
+    load_mode = workload.get("load_mode", "closed_loop")
+    target_request_rate_rps = safe_float(workload.get("arrival_rate_rps"))
+    achieved_request_start_rate_rps: float | None = None
+    if load_mode == "open_loop" and len(request_start_offsets) > 1:
+        request_start_span_s = max(request_start_offsets) - min(request_start_offsets)
+        if request_start_span_s > 0:
+            achieved_request_start_rate_rps = (len(request_start_offsets) - 1) / request_start_span_s
 
     return {
         "workload": workload_name,
+        "load_mode": load_mode,
+        "target_request_rate_rps": target_request_rate_rps,
+        "achieved_request_start_rate_rps": achieved_request_start_rate_rps,
+        "scheduler_delay_p95_s": percentile(scheduler_delays, 0.95),
+        "scheduled_latency_p95_s": percentile(scheduled_latencies, 0.95),
         "request_count": request_count,
         "success_count": success_count,
         "error_count": request_count - success_count,
@@ -425,6 +480,11 @@ def write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
     columns = [
         "workload",
+        "load_mode",
+        "target_request_rate_rps",
+        "achieved_request_start_rate_rps",
+        "scheduler_delay_p95_s",
+        "scheduled_latency_p95_s",
         "success_count",
         "error_count",
         "timeout_count",
@@ -456,13 +516,27 @@ def validate_workload(config: dict[str, Any]) -> None:
     if "runs" not in config or not isinstance(config["runs"], list) or not config["runs"]:
         raise ValueError("workload must contain a non-empty 'runs' list")
     for index, run in enumerate(config["runs"]):
-        for key in ("name", "request_count", "concurrency", "max_tokens"):
+        for key in ("name", "request_count", "max_tokens"):
             if key not in run:
                 raise ValueError(f"run {index} is missing required key '{key}'")
         if int(run["request_count"]) < 1:
             raise ValueError(f"run {run['name']} must have request_count >= 1")
-        if int(run["concurrency"]) < 1:
-            raise ValueError(f"run {run['name']} must have concurrency >= 1")
+        load_mode = run.get("load_mode", "closed_loop")
+        if load_mode not in {"closed_loop", "open_loop"}:
+            raise ValueError(f"run {run['name']} has unsupported load_mode '{load_mode}'")
+        if load_mode == "closed_loop":
+            if "concurrency" not in run:
+                raise ValueError(f"closed-loop run {run['name']} must define concurrency")
+            if int(run["concurrency"]) < 1:
+                raise ValueError(f"run {run['name']} must have concurrency >= 1")
+        else:
+            if (
+                safe_float(run.get("arrival_rate_rps")) is None
+                or float(run["arrival_rate_rps"]) <= 0
+            ):
+                raise ValueError(f"open-loop run {run['name']} must have arrival_rate_rps > 0")
+            if int(run.get("max_in_flight", 0)) < 1:
+                raise ValueError(f"open-loop run {run['name']} must have max_in_flight >= 1")
 
 
 def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
@@ -472,8 +546,11 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
         "runs": [
             {
                 "name": run["name"],
+                "load_mode": run.get("load_mode", "closed_loop"),
                 "request_count": int(run["request_count"]),
-                "concurrency": int(run["concurrency"]),
+                "concurrency": int(run["concurrency"]) if "concurrency" in run else None,
+                "arrival_rate_rps": safe_float(run.get("arrival_rate_rps")),
+                "max_in_flight": int(run["max_in_flight"]) if "max_in_flight" in run else None,
                 "prompt_words": int(run.get("prompt_words", 256)),
                 "max_tokens": int(run["max_tokens"]),
                 "timeout_seconds": float(run.get("timeout_seconds", 120)),
@@ -536,22 +613,49 @@ def run_benchmark(args: argparse.Namespace) -> int:
             for workload in config["runs"]:
                 workload_name = workload["name"]
                 request_count = int(workload["request_count"])
-                concurrency = int(workload["concurrency"])
+                load_mode = workload.get("load_mode", "closed_loop")
+                concurrency = (
+                    int(workload["concurrency"])
+                    if load_mode == "closed_loop"
+                    else int(workload["max_in_flight"])
+                )
                 workload_results: list[dict[str, Any]] = []
                 workload_started = time.perf_counter()
 
                 with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                    futures = [
-                        executor.submit(
-                            post_streaming_chat,
-                            endpoint,
-                            api_key,
-                            model,
-                            workload,
-                            index,
-                        )
-                        for index in range(request_count)
-                    ]
+                    futures = []
+                    if load_mode == "open_loop":
+                        arrival_rate_rps = float(workload["arrival_rate_rps"])
+                        for index in range(request_count):
+                            scheduled_offset_s = index / arrival_rate_rps
+                            sleep_s = workload_started + scheduled_offset_s - time.perf_counter()
+                            if sleep_s > 0:
+                                time.sleep(sleep_s)
+                            futures.append(
+                                executor.submit(
+                                    post_streaming_chat,
+                                    endpoint,
+                                    api_key,
+                                    model,
+                                    workload,
+                                    index,
+                                    workload_started,
+                                    scheduled_offset_s,
+                                )
+                            )
+                    else:
+                        futures = [
+                            executor.submit(
+                                post_streaming_chat,
+                                endpoint,
+                                api_key,
+                                model,
+                                workload,
+                                index,
+                                workload_started,
+                            )
+                            for index in range(request_count)
+                        ]
                     for future in as_completed(futures):
                         result = future.result()
                         result.update(
@@ -559,7 +663,18 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                 "run_id": run_id,
                                 "workload": workload_name,
                                 "model": model,
-                                "concurrency": concurrency,
+                                "load_mode": load_mode,
+                                "concurrency": (
+                                    int(workload["concurrency"])
+                                    if load_mode == "closed_loop"
+                                    else None
+                                ),
+                                "target_request_rate_rps": (
+                                    float(workload["arrival_rate_rps"])
+                                    if load_mode == "open_loop"
+                                    else None
+                                ),
+                                "max_in_flight": concurrency,
                                 "requested_max_tokens": int(workload["max_tokens"]),
                                 "prompt_words": int(workload.get("prompt_words", 256)),
                             }
@@ -571,7 +686,13 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 wall_time_s = time.perf_counter() - workload_started
                 gpu_summary = load_gpu_summary(gpu_path)
                 summary_rows.append(
-                    summarize_workload(workload_name, workload_results, wall_time_s, gpu_summary)
+                    summarize_workload(
+                        workload_name,
+                        workload,
+                        workload_results,
+                        wall_time_s,
+                        gpu_summary,
+                    )
                 )
     finally:
         sampler.stop()
