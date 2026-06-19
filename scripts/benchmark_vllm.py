@@ -477,6 +477,7 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
                 "prompt_words": int(run.get("prompt_words", 256)),
                 "max_tokens": int(run["max_tokens"]),
                 "timeout_seconds": float(run.get("timeout_seconds", 120)),
+                "extra_body_keys": sorted((run.get("extra_body") or {}).keys()),
                 "example_prompt_estimated_tokens": estimate_tokens(
                     generated_prompt(int(run.get("prompt_words", 256)), 0)
                 ),
