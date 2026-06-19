@@ -1,6 +1,6 @@
 {
-  "description": "Month 1 baseline workload for a Qwen3.5-9B vLLM OpenAI-compatible chat endpoint.",
-  "model": "Qwen/Qwen3.5-9B",
+  "description": "Month 1 baseline workload for a Llama 3.1 8B Instruct vLLM OpenAI-compatible chat endpoint.",
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
   "base_url": "http://localhost:8000",
   "api_key": "EMPTY",
   "runs": [
@@ -11,12 +11,7 @@
       "prompt_words": 256,
       "max_tokens": 128,
       "temperature": 0.0,
-      "timeout_seconds": 120,
-      "extra_body": {
-        "chat_template_kwargs": {
-          "enable_thinking": false
-        }
-      }
+      "timeout_seconds": 120
     },
     {
       "name": "baseline_c4_prompt512_out128",
@@ -25,12 +20,7 @@
       "prompt_words": 512,
       "max_tokens": 128,
       "temperature": 0.0,
-      "timeout_seconds": 120,
-      "extra_body": {
-        "chat_template_kwargs": {
-          "enable_thinking": false
-        }
-      }
+      "timeout_seconds": 120
     }
   ]
 }

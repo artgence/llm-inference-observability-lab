@@ -14,7 +14,7 @@ import urllib.request
 def main() -> int:
     base_url = os.environ.get("VLLM_BASE_URL", "http://localhost:8000").rstrip("/")
     model = os.environ.get("SERVED_MODEL_NAME") or os.environ.get(
-        "MODEL_ID", "Qwen/Qwen3.5-9B"
+        "MODEL_ID", "meta-llama/Llama-3.1-8B-Instruct"
     )
     api_key = os.environ.get("OPENAI_API_KEY", "EMPTY")
     endpoint = f"{base_url}/v1/chat/completions"
@@ -29,7 +29,6 @@ def main() -> int:
         ],
         "max_tokens": 64,
         "temperature": 0.0,
-        "chat_template_kwargs": {"enable_thinking": False},
     }
 
     request = urllib.request.Request(

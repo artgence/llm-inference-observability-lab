@@ -22,7 +22,7 @@ Goal: build a clean, reproducible baseline loop before adding complex serving kn
 Start the server:
 
 ```bash
-MODEL_ID=Qwen/Qwen3.5-9B scripts/start_vllm_server.sh
+MODEL_ID=meta-llama/Llama-3.1-8B-Instruct scripts/start_vllm_server.sh
 ```
 
 Smoke test:
@@ -49,9 +49,9 @@ Scrape vLLM metrics before or after a benchmark:
 python3 scripts/scrape_vllm_metrics.py --output benchmarks/metrics.prom
 ```
 
-## Qwen3.5 Serving Notes
+## Llama 3.1 Serving Notes
 
-For the first baseline, keep `MAX_MODEL_LEN=8192` unless the GPU host has enough memory for a larger KV cache. Qwen3.5-9B supports a native context length of 262,144 tokens; increase `MAX_MODEL_LEN` only after validating memory headroom on the target GPU. The model runs with `TENSOR_PARALLEL_SIZE=1` on a single L40S. The Month 1 workload disables thinking with `chat_template_kwargs.enable_thinking=false` to keep output length and latency easier to compare.
+For the first baseline, keep `MAX_MODEL_LEN=8192` unless the GPU host has enough memory for a larger KV cache. Llama 3.1 8B supports a native context length of 131,072 tokens; increase `MAX_MODEL_LEN` only after validating memory headroom on the target GPU. The model runs with `TENSOR_PARALLEL_SIZE=1` on a single L40S. Access to the gated model repository requires accepting Meta's license and authenticating with Hugging Face.
 
 ## First Analysis Questions
 
