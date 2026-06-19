@@ -4,7 +4,7 @@
 
 Status: awaiting first GPU-backed run.
 
-This report captures the first reproducible baseline for vLLM serving using meta-llama/Llama-3.1-8B-Instruct, OpenAI-compatible requests, request-level latency metrics, token throughput, error tracking, and GPU telemetry.
+This report captures the first reproducible baseline for vLLM serving using neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8, OpenAI-compatible requests, request-level latency metrics, token throughput, error tracking, and GPU telemetry.
 
 ## Environment
 
@@ -18,12 +18,12 @@ This report captures the first reproducible baseline for vLLM serving using meta
 | Python | TBD |
 | vLLM version | TBD |
 | CUDA / driver | TBD |
-| Model | meta-llama/Llama-3.1-8B-Instruct |
+| Model | neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 |
 
 ## Server Command
 
 ```bash
-MODEL_ID=meta-llama/Llama-3.1-8B-Instruct scripts/start_vllm_server.sh
+MODEL_ID=neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 scripts/start_vllm_server.sh
 ```
 
 Record the exact expanded command and any deviations here. For full native Llama 3.1 context, note `MAX_MODEL_LEN` and `TENSOR_PARALLEL_SIZE`.

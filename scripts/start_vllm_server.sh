@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_ID="${MODEL_ID:-meta-llama/Llama-3.1-8B-Instruct}"
+MODEL_ID="${MODEL_ID:-neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_ID}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"

@@ -22,7 +22,7 @@ Goal: build a clean, reproducible baseline loop before adding complex serving kn
 Start the server:
 
 ```bash
-MODEL_ID=meta-llama/Llama-3.1-8B-Instruct scripts/start_vllm_server.sh
+MODEL_ID=neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 scripts/start_vllm_server.sh
 ```
 
 Smoke test:
