@@ -4,7 +4,7 @@
 
 Status: awaiting first GPU-backed run.
 
-This report captures the first reproducible baseline for vLLM serving using Qwen/Qwen3.6-35B-A3B, OpenAI-compatible requests, request-level latency metrics, token throughput, error tracking, and GPU telemetry.
+This report captures the first reproducible baseline for vLLM serving using Qwen/Qwen3.5-9B, OpenAI-compatible requests, request-level latency metrics, token throughput, error tracking, and GPU telemetry.
 
 ## Environment
 
@@ -18,21 +18,21 @@ This report captures the first reproducible baseline for vLLM serving using Qwen
 | Python | TBD |
 | vLLM version | TBD |
 | CUDA / driver | TBD |
-| Model | Qwen/Qwen3.6-35B-A3B |
+| Model | Qwen/Qwen3.5-9B |
 
 ## Server Command
 
 ```bash
-MODEL_ID=Qwen/Qwen3.6-35B-A3B scripts/start_vllm_server.sh
+MODEL_ID=Qwen/Qwen3.5-9B scripts/start_vllm_server.sh
 ```
 
-Record the exact expanded command and any deviations here. For full native Qwen3.6 context, note `MAX_MODEL_LEN`, `TENSOR_PARALLEL_SIZE`, and whether `LANGUAGE_MODEL_ONLY` was enabled.
+Record the exact expanded command and any deviations here. For full native Qwen3.5 context, note `MAX_MODEL_LEN`, `TENSOR_PARALLEL_SIZE`, and whether `LANGUAGE_MODEL_ONLY` was enabled.
 
 ## Workload
 
 Workload file: `workloads/month1_baseline.json`
 
-The baseline workload disables Qwen3.6 thinking mode with `chat_template_kwargs.enable_thinking=false` so TTFT, TPOT, and output length are easier to compare across runs.
+The baseline workload disables Qwen3.5 thinking mode with `chat_template_kwargs.enable_thinking=false` so TTFT, TPOT, and output length are easier to compare across runs.
 
 | Workload | Requests | Concurrency | Prompt Words | Max Output Tokens |
 | --- | ---: | ---: | ---: | ---: |
@@ -63,4 +63,4 @@ TBD
 
 - Increase request count enough for a more meaningful p95/p99.
 - Add a longer prompt baseline before Month 2 saturation sweeps.
-- Decide whether to keep the small 8K context baseline or run a larger Qwen3.6 context test on multi-GPU hardware.
+- Decide whether to keep the small 8K context baseline or run a larger Qwen3.5 context test if GPU memory allows.

@@ -22,7 +22,7 @@ Goal: build a clean, reproducible baseline loop before adding complex serving kn
 Start the server:
 
 ```bash
-MODEL_ID=Qwen/Qwen3.6-35B-A3B scripts/start_vllm_server.sh
+MODEL_ID=Qwen/Qwen3.5-9B scripts/start_vllm_server.sh
 ```
 
 Smoke test:
@@ -49,9 +49,9 @@ Scrape vLLM metrics before or after a benchmark:
 python3 scripts/scrape_vllm_metrics.py --output benchmarks/metrics.prom
 ```
 
-## Qwen3.6 Serving Notes
+## Qwen3.5 Serving Notes
 
-For the first baseline, keep `MAX_MODEL_LEN=8192` unless the GPU host has enough memory for a larger KV cache. For a full native-context Qwen3.6 run, set `MAX_MODEL_LEN=262144` and `TENSOR_PARALLEL_SIZE=8` on suitable multi-GPU hardware. The Month 1 workload disables thinking with `chat_template_kwargs.enable_thinking=false` to keep output length and latency easier to compare.
+For the first baseline, keep `MAX_MODEL_LEN=8192` unless the GPU host has enough memory for a larger KV cache. Qwen3.5-9B supports a native context length of 262,144 tokens; increase `MAX_MODEL_LEN` only after validating memory headroom on the target GPU. The model runs with `TENSOR_PARALLEL_SIZE=1` on a single L40S. The Month 1 workload disables thinking with `chat_template_kwargs.enable_thinking=false` to keep output length and latency easier to compare.
 
 ## First Analysis Questions
 

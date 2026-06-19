@@ -1,6 +1,6 @@
 {
-  "description": "Month 1 baseline workload for a Qwen3.6 vLLM OpenAI-compatible chat endpoint.",
-  "model": "Qwen/Qwen3.6-35B-A3B",
+  "description": "Month 1 baseline workload for a Qwen3.5-9B vLLM OpenAI-compatible chat endpoint.",
+  "model": "Qwen/Qwen3.5-9B",
   "base_url": "http://localhost:8000",
   "api_key": "EMPTY",
   "runs": [

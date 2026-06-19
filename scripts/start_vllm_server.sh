@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_ID="${MODEL_ID:-Qwen/Qwen3.6-35B-A3B}"
+MODEL_ID="${MODEL_ID:-Qwen/Qwen3.5-9B}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_ID}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
