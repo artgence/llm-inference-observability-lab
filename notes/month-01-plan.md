@@ -49,7 +49,7 @@ Run the open-loop arrival-rate sweep:
 python3 scripts/benchmark_vllm.py --workload workloads/month1_open_loop.json
 ```
 
-The open-loop workload schedules 5, 10, 20, and 30 RPS independently of completions. Compare the target rate with `achieved_request_start_rate_rps`, and reject a run as load-generator-limited if `scheduler_delay_p95_s` is material.
+The open-loop workload schedules 5, 10, 12, 14, 16, 18, 20, and 30 RPS independently of completions, with the denser 12–20 RPS range targeting the expected saturation boundary. Compare the target rate with `achieved_request_start_rate_rps`, and reject a run as load-generator-limited if `scheduler_delay_p95_s` is material.
 
 Scrape vLLM metrics before or after a benchmark:
 

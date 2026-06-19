@@ -27,6 +27,50 @@
       "timeout_seconds": 180
     },
     {
+      "name": "open_loop_rps12_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 12,
+      "request_count": 240,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "open_loop_rps14_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 14,
+      "request_count": 280,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "open_loop_rps16_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 16,
+      "request_count": 320,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "open_loop_rps18_prompt512_out128",
+      "load_mode": "open_loop",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
       "name": "open_loop_rps20_prompt512_out128",
       "load_mode": "open_loop",
       "arrival_rate_rps": 20,
