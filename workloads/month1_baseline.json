@@ -45,6 +45,30 @@
       "prompt_words": 512,
       "max_tokens": 128,
       "timeout_seconds": 180
+    },
+    {
+      "name": "baseline_c48_prompt512_out128",
+      "request_count": 240,
+      "concurrency": 48,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "baseline_c64_prompt512_out128",
+      "request_count": 320,
+      "concurrency": 64,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "baseline_c96_prompt512_out128",
+      "request_count": 480,
+      "concurrency": 96,
+      "prompt_words": 512,
+      "max_tokens": 128,
+      "timeout_seconds": 180
     }
   ]
 }
