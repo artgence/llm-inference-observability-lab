@@ -59,6 +59,20 @@
       "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
       "temperature": 0.0,
       "timeout_seconds": 180
+    },
+    {
+      "name": "m2_prompt_rps18_p1024_o128",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 1024,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 240
     }
   ]
 }

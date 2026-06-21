@@ -12,6 +12,7 @@ from typing import Any
 
 DISPLAY_COLUMNS = [
     "workload",
+    "analysis_group",
     "concurrency",
     "target_request_rate_rps",
     "arrival_pattern",
@@ -172,7 +173,20 @@ def build_report(
 ) -> str:
     lines = ["# Month 2 Operating-Point Analysis", "", "## Findings", ""]
     analyzed: list[tuple[str, str, str, list[dict[str, str]]]] = []
+    grouped_runs: list[tuple[str, list[dict[str, str]]]] = []
     for label, raw_rows in runs:
+        groups: dict[str, list[dict[str, str]]] = {}
+        for row in raw_rows:
+            group = row.get("analysis_group") or ""
+            groups.setdefault(group, []).append(row)
+        if len(groups) == 1 and "" in groups:
+            grouped_runs.append((label, raw_rows))
+        else:
+            for group, group_rows in groups.items():
+                group_label = group or "ungrouped"
+                grouped_runs.append((f"{label}:{group_label}", group_rows))
+
+    for label, raw_rows in grouped_runs:
         dimension, dimension_label = varying_dimension(raw_rows)
         rows = sorted_rows(raw_rows, dimension)
         boundary, reasons = detect_boundary(

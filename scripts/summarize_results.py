@@ -11,6 +11,7 @@ from typing import Any
 
 DEFAULT_COLUMNS = [
     "workload",
+    "analysis_group",
     "load_mode",
     "arrival_pattern",
     "burst_size",

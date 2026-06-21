@@ -535,6 +535,7 @@ def summarize_workload(
 
     return {
         "workload": workload_name,
+        "analysis_group": workload.get("analysis_group"),
         "load_mode": load_mode,
         "arrival_pattern": (
             workload.get("arrival_pattern", "steady")
@@ -616,6 +617,7 @@ def write_summary_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
     columns = [
         "workload",
+        "analysis_group",
         "load_mode",
         "arrival_pattern",
         "burst_size",
@@ -714,6 +716,7 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
         "runs": [
             {
                 "name": run["name"],
+                "analysis_group": run.get("analysis_group"),
                 "load_mode": run.get("load_mode", "closed_loop"),
                 "arrival_pattern": (
                     run.get("arrival_pattern", "steady")
@@ -850,6 +853,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                             {
                                 "run_id": run_id,
                                 "workload": workload_name,
+                                "analysis_group": workload.get("analysis_group"),
                                 "model": model,
                                 "load_mode": load_mode,
                                 "arrival_pattern": (
