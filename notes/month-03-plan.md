@@ -35,7 +35,7 @@ python3 scripts/benchmark_vllm.py \
 
 ## Incident 2: Long Prompt Storm
 
-Restart vLLM with sufficient context capacity:
+Restart or recreate the serving container with sufficient context capacity. Do not run a second vLLM process while the existing PID 1 server still owns port 8000:
 
 ```bash
 MAX_MODEL_LEN=32768 scripts/start_vllm_server.sh
@@ -51,7 +51,7 @@ python3 scripts/benchmark_vllm.py \
 
 ## Incident 3: Memory Pressure
 
-Restart vLLM with at least a 16K model length, then deliberately increase concurrent KV demand:
+Restart or recreate the serving container with at least a 16K model length, then deliberately increase concurrent KV demand:
 
 ```bash
 MAX_MODEL_LEN=16384 scripts/start_vllm_server.sh

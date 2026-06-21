@@ -2,35 +2,50 @@
 set -euo pipefail
 
 MODEL_ID="${MODEL_ID:-neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8}"
-SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_ID}"
-HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-DTYPE="${DTYPE:-auto}"
-API_KEY="${OPENAI_API_KEY:-EMPTY}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
-REASONING_PARSER="${REASONING_PARSER:-}"
-LANGUAGE_MODEL_ONLY="${LANGUAGE_MODEL_ONLY:-false}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
+VLLM_BIN="${VLLM_BIN:-vllm}"
 
 args=(
-  vllm serve "$MODEL_ID"
-  --served-model-name "$SERVED_MODEL_NAME"
-  --host "$HOST"
-  --port "$PORT"
-  --dtype "$DTYPE"
-  --api-key "$API_KEY"
+  "$VLLM_BIN" serve
+  --model "$MODEL_ID"
   --max-model-len "$MAX_MODEL_LEN"
-  --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION"
-  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE"
-  --generation-config vllm
+  --port "$PORT"
 )
 
-if [[ -n "$REASONING_PARSER" ]]; then
+if [[ -n "${SERVED_MODEL_NAME:-}" ]]; then
+  args+=(--served-model-name "$SERVED_MODEL_NAME")
+fi
+
+if [[ -n "${HOST:-}" ]]; then
+  args+=(--host "$HOST")
+fi
+
+if [[ -n "${DTYPE:-}" ]]; then
+  args+=(--dtype "$DTYPE")
+fi
+
+if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+  args+=(--api-key "$OPENAI_API_KEY")
+fi
+
+if [[ -n "${GPU_MEMORY_UTILIZATION:-}" ]]; then
+  args+=(--gpu-memory-utilization "$GPU_MEMORY_UTILIZATION")
+fi
+
+if [[ -n "${TENSOR_PARALLEL_SIZE:-}" ]]; then
+  args+=(--tensor-parallel-size "$TENSOR_PARALLEL_SIZE")
+fi
+
+if [[ -n "${GENERATION_CONFIG:-}" ]]; then
+  args+=(--generation-config "$GENERATION_CONFIG")
+fi
+
+if [[ -n "${REASONING_PARSER:-}" ]]; then
   args+=(--reasoning-parser "$REASONING_PARSER")
 fi
 
-if [[ "$LANGUAGE_MODEL_ONLY" == "true" ]]; then
+if [[ "${LANGUAGE_MODEL_ONLY:-false}" == "true" ]]; then
   args+=(--language-model-only)
 fi
 
