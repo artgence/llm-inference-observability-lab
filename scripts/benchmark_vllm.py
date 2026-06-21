@@ -245,34 +245,11 @@ def post_streaming_chat(
 ) -> dict[str, Any]:
     prompt = prompt_for_workload(workload, request_index)
     timeout = float(workload.get("timeout_seconds", 120))
-    started_perf = time.perf_counter()
-    started_at = utc_now()
-    request_start_offset_s = (
-        started_perf - workload_started_perf if workload_started_perf is not None else None
-    )
-    scheduler_delay_s = (
-        max(0.0, request_start_offset_s - scheduled_offset_s)
-        if request_start_offset_s is not None and scheduled_offset_s is not None
-        else None
-    )
     ttft_s: float | None = None
     token_event_times: list[float] = []
     content_parts: list[str] = []
     usage: dict[str, Any] = {}
     status_code: int | None = None
-
-    def scheduling_fields(ended_perf: float) -> dict[str, float | None]:
-        scheduled_latency_s = (
-            ended_perf - workload_started_perf - scheduled_offset_s
-            if workload_started_perf is not None and scheduled_offset_s is not None
-            else None
-        )
-        return {
-            "scheduled_offset_s": scheduled_offset_s,
-            "request_start_offset_s": request_start_offset_s,
-            "scheduler_delay_s": scheduler_delay_s,
-            "scheduled_latency_s": scheduled_latency_s,
-        }
 
     payload: dict[str, Any] = {
         "model": model,
@@ -294,6 +271,30 @@ def post_streaming_chat(
         method="POST",
     )
 
+    def scheduling_fields(ended_perf: float) -> dict[str, Any]:
+        request_start_offset_s = (
+            started_perf - workload_started_perf if workload_started_perf is not None else None
+        )
+        scheduler_delay_s = (
+            max(0.0, request_start_offset_s - scheduled_offset_s)
+            if request_start_offset_s is not None and scheduled_offset_s is not None
+            else None
+        )
+        scheduled_latency_s = (
+            ended_perf - workload_started_perf - scheduled_offset_s
+            if workload_started_perf is not None and scheduled_offset_s is not None
+            else None
+        )
+        return {
+            "latency_origin": "request_send",
+            "scheduled_offset_s": scheduled_offset_s,
+            "request_start_offset_s": request_start_offset_s,
+            "scheduler_delay_s": scheduler_delay_s,
+            "scheduled_latency_s": scheduled_latency_s,
+        }
+
+    started_at = utc_now()
+    started_perf = time.perf_counter()
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status_code = response.status

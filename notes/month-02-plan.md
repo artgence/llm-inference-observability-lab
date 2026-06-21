@@ -5,8 +5,8 @@ Goal: use the Month 1 operating point of 18 RPS to determine how prompt length, 
 ## Implementation Status
 
 - [x] Use the Month 1 best-performing steady rate of 18 RPS for Month 2.
-- [x] Prompt-token target sweep at 512, 2K, 4K, and 8K at 18 RPS.
-- [x] Output-token target sweep at 128, 512, and 1024 at 18 RPS.
+- [x] Prompt-token target sweep at 64, 128, 256, and 512 at 18 RPS.
+- [x] Output-token target sweep at 64, 128, 256, and 512 at 18 RPS.
 - [x] Steady-versus-bursty open-loop comparison at 18 average RPS.
 - [x] TTFT, TPOT, end-to-end latency, throughput, error, timeout, OOM, and GPU metrics.
 - [x] Configurable GPU cost and cost-per-million-token estimates.
@@ -17,11 +17,7 @@ Goal: use the Month 1 operating point of 18 RPS to determine how prompt length, 
 
 ## Server Prerequisite
 
-The 8K prompt stage needs room for chat-template overhead and generated output. Start vLLM with at least a 16K model length:
-
-```bash
-MAX_MODEL_LEN=16384 scripts/start_vllm_server.sh
-```
+The default `MAX_MODEL_LEN=8192` has sufficient context capacity for the largest 512-token prompt and 512-token output stages, including chat-template overhead.
 
 ## Run Sequence
 
@@ -51,6 +47,7 @@ python3 scripts/analyze_saturation.py \
 
 ## Acceptance Checks
 
+- `latency_s` and TTFT start immediately before the HTTP send attempt; `scheduled_latency_s` separately includes time since the planned open-loop arrival.
 - `prompt_tokens_avg` is reasonably close to `prompt_tokens_target`; use the server-reported average in conclusions.
 - `output_tokens_avg` is reasonably close to `output_tokens_target`; otherwise the output-length stage is not valid.
 - `scheduler_delay_p95_s` remains below 0.1 seconds for open-loop stages. Otherwise the load generator, not vLLM, is limiting arrivals.

@@ -17,15 +17,17 @@ This report evaluates `neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8` on one L40S a
 | CUDA / driver | TBD |
 | Model | neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 |
 | Effective GPU hourly cost | TBD |
-| Max model length | 16384 or actual |
+| Max model length | 8192 or actual |
 
 ## Controlled Sweeps
 
 | Sweep | Values | Fixed variables |
 | --- | --- | --- |
-| Prompt target | 512, 2048, 4096, 8192 | steady 18 RPS, output target 128 |
-| Output target | 128, 512, 1024 | steady 18 RPS, prompt target 512 |
+| Prompt target | 64, 128, 256, 512 | steady 18 RPS, output target 128 |
+| Output target | 64, 128, 256, 512 | steady 18 RPS, prompt target 512 |
 | Request pattern | steady, burst sizes 4, 8, 16 | average 18 RPS, prompt target 512, output target 128 |
+
+`latency_s` and TTFT are measured from the actual HTTP send attempt. `scheduled_latency_s` is reported separately for open-loop analysis and includes any delay from the planned arrival time.
 
 ## Operating-Point Robustness
 
