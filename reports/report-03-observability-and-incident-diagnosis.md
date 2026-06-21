@@ -32,6 +32,7 @@ This report correlates request-level benchmark data, vLLM Prometheus metrics, an
 
 Link: `incidents/incident-01-traffic-burst.md`
 
+- Test matrix: steady and burst sizes 16, 32, and 64 at 18, 24, 30, and 36 average RPS; p512/o128
 - Symptom and impact: TBD
 - Queue/TTFT evidence: TBD
 - Mitigation and alert: TBD

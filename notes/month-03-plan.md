@@ -23,6 +23,8 @@ docker compose -f observability/docker-compose.yml up -d
 
 ## Incident 1: Traffic Burst
 
+Compare steady traffic with burst sizes 16, 32, and 64 at average rates of 18, 24, 30, and 36 RPS. Each case runs for 20 seconds at p512/o128.
+
 Use the normal 8K server configuration:
 
 ```bash

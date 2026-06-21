@@ -128,66 +128,6 @@ def scheduled_offset_for_request(workload: dict[str, Any], request_index: int) -
     return request_index / arrival_rate_rps
 
 
-def expand_workload_config(config: dict[str, Any]) -> dict[str, Any]:
-    matrix = config.get("burst_matrix")
-    if matrix is None:
-        return config
-    arrival_rates = matrix.get("arrival_rates_rps") or []
-    output_targets = matrix.get("output_tokens") or []
-    burst_sizes = matrix.get("burst_sizes") or []
-    if not arrival_rates or not output_targets or not burst_sizes:
-        raise ValueError(
-            "burst_matrix requires arrival_rates_rps, output_tokens, and burst_sizes"
-        )
-    prompt_tokens = int(matrix.get("prompt_tokens", 512))
-    duration_seconds = float(matrix.get("duration_seconds", 20))
-    max_in_flight = int(matrix.get("max_in_flight", 256))
-    timeout_seconds = float(matrix.get("timeout_seconds", 600))
-    if prompt_tokens < 1 or duration_seconds <= 0 or max_in_flight < 1:
-        raise ValueError("burst_matrix prompt, duration, and max_in_flight must be positive")
-
-    runs = list(config.get("runs") or [])
-    for output_tokens in output_targets:
-        output_tokens = int(output_tokens)
-        for arrival_rate in arrival_rates:
-            arrival_rate = float(arrival_rate)
-            rate_label = f"{arrival_rate:g}".replace(".", "_")
-            analysis_group = (
-                f"burst_p{prompt_tokens}_o{output_tokens}_rps{rate_label}"
-            )
-            for raw_burst_size in burst_sizes:
-                burst_size = int(raw_burst_size or 0)
-                pattern_label = "steady" if burst_size == 0 else f"burst{burst_size}"
-                run: dict[str, Any] = {
-                    "name": (
-                        f"m2_{pattern_label}_rps{rate_label}_p{prompt_tokens}_o{output_tokens}"
-                    ),
-                    "analysis_group": analysis_group,
-                    "load_mode": "open_loop",
-                    "arrival_pattern": "steady" if burst_size == 0 else "bursty",
-                    "arrival_rate_rps": arrival_rate,
-                    "request_count": round(arrival_rate * duration_seconds),
-                    "max_in_flight": max_in_flight,
-                    "prompt_tokens": prompt_tokens,
-                    "max_tokens": output_tokens,
-                    "output_tokens_target": output_tokens,
-                    "response_instruction": (
-                        f"Write approximately {output_tokens} output tokens analyzing the "
-                        "serving bottlenecks in detail. Continue until the requested "
-                        "length is reached."
-                    ),
-                    "temperature": 0.0,
-                    "timeout_seconds": timeout_seconds,
-                }
-                if burst_size:
-                    run["burst_size"] = burst_size
-                runs.append(run)
-
-    expanded = dict(config)
-    expanded["runs"] = runs
-    return expanded
-
-
 def percentile(values: list[float], q: float) -> float | None:
     if not values:
         return None
@@ -1062,9 +1002,7 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
 
 
 def run_benchmark(args: argparse.Namespace) -> int:
-    config = expand_workload_config(
-        json.loads(Path(args.workload).read_text(encoding="utf-8"))
-    )
+    config = json.loads(Path(args.workload).read_text(encoding="utf-8"))
     validate_workload(config)
     if args.gpu_sample_interval <= 0:
         raise ValueError("gpu-sample-interval must be > 0")

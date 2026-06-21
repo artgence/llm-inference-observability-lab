@@ -25,7 +25,7 @@ This report evaluates `neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8` on one L40S a
 | --- | --- | --- |
 | Prompt target | 64, 128, 256, 512, 1024 | steady 18 RPS, output target 128 |
 | Output target | 64, 128, 256, 512, 1024 | steady 18 RPS, prompt target 512 |
-| Request pattern | steady, burst sizes 4, 8, 16 | average 18, 24, 30, and 36 RPS; prompt target 512; output targets 128, 256, 512 |
+| Request pattern | steady, burst sizes 4, 8, 16 | average 18 RPS, prompt target 512, output targets 128, 256, 512 |
 
 `latency_s` and TTFT are measured from the actual HTTP send attempt. `scheduled_latency_s` is reported separately for open-loop analysis and includes any delay from the planned arrival time.
 

@@ -7,7 +7,7 @@ Goal: use the Month 1 operating point of 18 RPS to determine how prompt length, 
 - [x] Use the Month 1 best-performing steady rate of 18 RPS for Month 2.
 - [x] Prompt-token target sweep at 64, 128, 256, 512, and 1024 at 18 RPS.
 - [x] Output-token target sweep at 64, 128, 256, 512, and 1024 at 18 RPS.
-- [x] Steady-versus-bursty open-loop comparison at 18, 24, 30, and 36 average RPS for p512/o128, p512/o256, and p512/o512.
+- [x] Steady-versus-bursty open-loop comparison at 18 average RPS for p512/o128, p512/o256, and p512/o512.
 - [x] TTFT, TPOT, end-to-end latency, throughput, error, timeout, OOM, and GPU metrics.
 - [x] Configurable GPU cost and cost-per-million-token estimates.
 - [x] Automated operating-point degradation and bottleneck analysis.
