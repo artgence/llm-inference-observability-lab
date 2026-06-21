@@ -1,0 +1,64 @@
+{
+  "description": "Month 2 prompt-length sweep at the Month 1 operating point of 18 steady open-loop RPS with a fixed 128-token output target.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "runs": [
+    {
+      "name": "m2_prompt_rps18_p512_o128",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "m2_prompt_rps18_p2048_o128",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 2048,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 240
+    },
+    {
+      "name": "m2_prompt_rps18_p4096_o128",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 4096,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m2_prompt_rps18_p8192_o128",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 360
+    }
+  ]
+}

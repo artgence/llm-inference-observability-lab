@@ -53,7 +53,14 @@ def estimate_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 4))
 
 
-def generated_prompt(word_count: int, request_index: int) -> str:
+DEFAULT_RESPONSE_INSTRUCTION = "Summarize the likely bottlenecks in three concise bullets."
+
+
+def generated_prompt(
+    word_count: int,
+    request_index: int,
+    response_instruction: str = DEFAULT_RESPONSE_INSTRUCTION,
+) -> str:
     words = [VOCAB[i % len(VOCAB)] for i in range(word_count)]
     return (
         "You are evaluating an LLM inference service. Use the context below to "
@@ -61,8 +68,52 @@ def generated_prompt(word_count: int, request_index: int) -> str:
         f"Request id: {request_index}\n"
         "Context:\n"
         + " ".join(words)
-        + "\n\nQuestion: Summarize the likely bottlenecks in three concise bullets."
+        + f"\n\nQuestion: {response_instruction}"
     )
+
+
+def generated_prompt_for_token_target(
+    token_count: int,
+    request_index: int,
+    response_instruction: str = DEFAULT_RESPONSE_INSTRUCTION,
+) -> str:
+    """Generate a deterministic prompt near a target using the harness's chars/token estimate."""
+    prefix = (
+        "You are evaluating an LLM inference service. Identify operational risks.\n\n"
+        f"Request id: {request_index}\nContext:\n"
+    )
+    suffix = f"\n\nQuestion: {response_instruction}"
+    target_chars = token_count * 4
+    filler_chars = max(0, target_chars - len(prefix) - len(suffix))
+    filler = ("the " * math.ceil(filler_chars / 4))[:filler_chars]
+    return prefix + filler + suffix
+
+
+def prompt_for_workload(workload: dict[str, Any], request_index: int) -> str:
+    if workload.get("prompt"):
+        return str(workload["prompt"])
+    response_instruction = str(
+        workload.get("response_instruction", DEFAULT_RESPONSE_INSTRUCTION)
+    )
+    if workload.get("prompt_tokens") is not None:
+        return generated_prompt_for_token_target(
+            int(workload["prompt_tokens"]),
+            request_index,
+            response_instruction,
+        )
+    return generated_prompt(
+        int(workload.get("prompt_words", 256)),
+        request_index,
+        response_instruction,
+    )
+
+
+def scheduled_offset_for_request(workload: dict[str, Any], request_index: int) -> float:
+    arrival_rate_rps = float(workload["arrival_rate_rps"])
+    if workload.get("arrival_pattern", "steady") == "bursty":
+        burst_size = int(workload["burst_size"])
+        return (request_index // burst_size) * burst_size / arrival_rate_rps
+    return request_index / arrival_rate_rps
 
 
 def percentile(values: list[float], q: float) -> float | None:
@@ -111,6 +162,12 @@ class GpuSampler:
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.available = shutil.which("nvidia-smi") is not None
+        self.workload_name = "unassigned"
+        self.workload_lock = threading.Lock()
+
+    def set_workload(self, workload_name: str) -> None:
+        with self.workload_lock:
+            self.workload_name = workload_name
 
     def start(self) -> None:
         if not self.available:
@@ -124,6 +181,7 @@ class GpuSampler:
             writer = csv.writer(handle)
             writer.writerow([
                 "collected_at",
+                "workload",
                 "gpu_index",
                 "gpu_name",
                 "memory_used_mb",
@@ -162,11 +220,13 @@ class GpuSampler:
 
         rows = []
         collected_at = utc_now()
+        with self.workload_lock:
+            workload_name = self.workload_name
         for line in result.stdout.splitlines():
             parts = [part.strip() for part in line.split(",")]
             if len(parts) < 5:
                 continue
-            rows.append([collected_at, *parts[:5]])
+            rows.append([collected_at, workload_name, *parts[:5]])
 
         if rows:
             with self.output_path.open("a", newline="", encoding="utf-8") as handle:
@@ -183,7 +243,7 @@ def post_streaming_chat(
     workload_started_perf: float | None = None,
     scheduled_offset_s: float | None = None,
 ) -> dict[str, Any]:
-    prompt = workload.get("prompt") or generated_prompt(int(workload.get("prompt_words", 256)), request_index)
+    prompt = prompt_for_workload(workload, request_index)
     timeout = float(workload.get("timeout_seconds", 120))
     started_perf = time.perf_counter()
     started_at = utc_now()
@@ -369,22 +429,36 @@ def post_streaming_chat(
     }
 
 
-def load_gpu_summary(gpu_path: Path) -> dict[str, float | None]:
+def load_gpu_summary(gpu_path: Path, workload_name: str | None = None) -> dict[str, float | None]:
     if not gpu_path.exists():
-        return {"gpu_memory_used_mb_max": None, "gpu_utilization_pct_avg": None}
+        return {
+            "gpu_memory_used_mb_max": None,
+            "gpu_memory_utilization_pct_max": None,
+            "gpu_utilization_pct_avg": None,
+        }
     memory_values: list[float] = []
+    memory_utilization_values: list[float] = []
     util_values: list[float] = []
     with gpu_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
+            sampled_workload = row.get("workload")
+            if workload_name is not None and sampled_workload and sampled_workload != workload_name:
+                continue
             memory = safe_float(row.get("memory_used_mb"))
+            memory_total = safe_float(row.get("memory_total_mb"))
             util = safe_float(row.get("gpu_utilization_pct"))
             if memory is not None:
                 memory_values.append(memory)
+                if memory_total is not None and memory_total > 0:
+                    memory_utilization_values.append(memory / memory_total)
             if util is not None:
                 util_values.append(util)
     return {
         "gpu_memory_used_mb_max": max(memory_values) if memory_values else None,
+        "gpu_memory_utilization_pct_max": (
+            max(memory_utilization_values) * 100 if memory_utilization_values else None
+        ),
         "gpu_utilization_pct_avg": sum(util_values) / len(util_values) if util_values else None,
     }
 
@@ -395,6 +469,7 @@ def summarize_workload(
     results: list[dict[str, Any]],
     wall_time_s: float,
     gpu_summary: dict[str, float | None],
+    gpu_hourly_cost_usd: float | None,
 ) -> dict[str, Any]:
     successes = [row for row in results if row.get("success")]
     latencies = [float(row["latency_s"]) for row in successes if row.get("latency_s") is not None]
@@ -402,6 +477,16 @@ def summarize_workload(
     tpots = [float(row["tpot_s"]) for row in successes if row.get("tpot_s") is not None]
     output_tokens = sum(int(row.get("output_tokens") or 0) for row in successes)
     total_tokens = sum(int(row.get("total_tokens") or 0) for row in successes)
+    prompt_token_values = [
+        int(row["prompt_tokens"])
+        for row in successes
+        if row.get("prompt_tokens") is not None
+    ]
+    output_token_values = [
+        int(row["output_tokens"])
+        for row in successes
+        if row.get("output_tokens") is not None
+    ]
     scheduler_delays = [
         float(row["scheduler_delay_s"])
         for row in results
@@ -424,12 +509,49 @@ def summarize_workload(
     achieved_request_start_rate_rps: float | None = None
     if load_mode == "open_loop" and len(request_start_offsets) > 1:
         request_start_span_s = max(request_start_offsets) - min(request_start_offsets)
-        if request_start_span_s > 0:
-            achieved_request_start_rate_rps = (len(request_start_offsets) - 1) / request_start_span_s
+        arrival_rate_rps = float(workload["arrival_rate_rps"])
+        burst_size = int(workload.get("burst_size", 1))
+        final_arrival_count = request_count % burst_size or burst_size
+        arrival_window_s = final_arrival_count / arrival_rate_rps
+        observed_window_s = request_start_span_s + arrival_window_s
+        nominal_window_s = request_count / arrival_rate_rps
+        achieved_window_s = max(observed_window_s, nominal_window_s)
+        if achieved_window_s > 0:
+            achieved_request_start_rate_rps = request_count / achieved_window_s
+    estimated_gpu_cost_usd = (
+        gpu_hourly_cost_usd * wall_time_s / 3600 if gpu_hourly_cost_usd is not None else None
+    )
+    cost_per_1m_output_tokens_usd = (
+        estimated_gpu_cost_usd * 1_000_000 / output_tokens
+        if estimated_gpu_cost_usd is not None and output_tokens > 0
+        else None
+    )
+    cost_per_1m_total_tokens_usd = (
+        estimated_gpu_cost_usd * 1_000_000 / total_tokens
+        if estimated_gpu_cost_usd is not None and total_tokens > 0
+        else None
+    )
 
     return {
         "workload": workload_name,
         "load_mode": load_mode,
+        "arrival_pattern": (
+            workload.get("arrival_pattern", "steady")
+            if load_mode == "open_loop"
+            else "closed_loop"
+        ),
+        "burst_size": int(workload["burst_size"]) if "burst_size" in workload else None,
+        "concurrency": int(workload["concurrency"]) if "concurrency" in workload else None,
+        "prompt_tokens_target": (
+            int(workload["prompt_tokens"]) if "prompt_tokens" in workload else None
+        ),
+        "prompt_words": int(workload["prompt_words"]) if "prompt_words" in workload else None,
+        "max_tokens": int(workload["max_tokens"]),
+        "output_tokens_target": (
+            int(workload["output_tokens_target"])
+            if "output_tokens_target" in workload
+            else None
+        ),
         "target_request_rate_rps": target_request_rate_rps,
         "achieved_request_start_rate_rps": achieved_request_start_rate_rps,
         "scheduler_delay_p95_s": percentile(scheduler_delays, 0.95),
@@ -451,11 +573,24 @@ def summarize_workload(
         "tpot_p50_s": percentile(tpots, 0.50),
         "tpot_p95_s": percentile(tpots, 0.95),
         "tpot_p99_s": percentile(tpots, 0.99),
+        "prompt_tokens_avg": (
+            sum(prompt_token_values) / len(prompt_token_values) if prompt_token_values else None
+        ),
+        "output_tokens_avg": (
+            sum(output_token_values) / len(output_token_values) if output_token_values else None
+        ),
         "requests_per_sec": success_count / wall_time_s if wall_time_s > 0 else None,
         "output_tokens_per_sec": output_tokens / wall_time_s if wall_time_s > 0 else None,
         "total_tokens_per_sec": total_tokens / wall_time_s if wall_time_s > 0 else None,
         "gpu_memory_used_mb_max": gpu_summary.get("gpu_memory_used_mb_max"),
+        "gpu_memory_utilization_pct_max": gpu_summary.get(
+            "gpu_memory_utilization_pct_max"
+        ),
         "gpu_utilization_pct_avg": gpu_summary.get("gpu_utilization_pct_avg"),
+        "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
+        "estimated_gpu_cost_usd": estimated_gpu_cost_usd,
+        "cost_per_1m_output_tokens_usd": cost_per_1m_output_tokens_usd,
+        "cost_per_1m_total_tokens_usd": cost_per_1m_total_tokens_usd,
         "wall_time_s": wall_time_s,
     }
 
@@ -481,6 +616,12 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
     columns = [
         "workload",
         "load_mode",
+        "arrival_pattern",
+        "burst_size",
+        "concurrency",
+        "prompt_tokens_target",
+        "max_tokens",
+        "output_tokens_target",
         "target_request_rate_rps",
         "achieved_request_start_rate_rps",
         "scheduler_delay_p95_s",
@@ -499,11 +640,17 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "ttft_p95_s",
         "tpot_p50_s",
         "tpot_p95_s",
+        "prompt_tokens_avg",
+        "output_tokens_avg",
         "requests_per_sec",
         "output_tokens_per_sec",
         "total_tokens_per_sec",
         "gpu_memory_used_mb_max",
+        "gpu_memory_utilization_pct_max",
         "gpu_utilization_pct_avg",
+        "gpu_hourly_cost_usd",
+        "cost_per_1m_output_tokens_usd",
+        "cost_per_1m_total_tokens_usd",
     ]
     lines = ["# Benchmark Summary", ""]
     lines.append("| " + " | ".join(columns) + " |")
@@ -517,12 +664,22 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
 def validate_workload(config: dict[str, Any]) -> None:
     if "runs" not in config or not isinstance(config["runs"], list) or not config["runs"]:
         raise ValueError("workload must contain a non-empty 'runs' list")
+    names: set[str] = set()
     for index, run in enumerate(config["runs"]):
         for key in ("name", "request_count", "max_tokens"):
             if key not in run:
                 raise ValueError(f"run {index} is missing required key '{key}'")
         if int(run["request_count"]) < 1:
             raise ValueError(f"run {run['name']} must have request_count >= 1")
+        if int(run["max_tokens"]) < 1:
+            raise ValueError(f"run {run['name']} must have max_tokens >= 1")
+        if run["name"] in names:
+            raise ValueError(f"duplicate workload name '{run['name']}'")
+        names.add(run["name"])
+        if "prompt_tokens" in run and int(run["prompt_tokens"]) < 1:
+            raise ValueError(f"run {run['name']} must have prompt_tokens >= 1")
+        if "output_tokens_target" in run and int(run["output_tokens_target"]) < 1:
+            raise ValueError(f"run {run['name']} must have output_tokens_target >= 1")
         load_mode = run.get("load_mode", "closed_loop")
         if load_mode not in {"closed_loop", "open_loop"}:
             raise ValueError(f"run {run['name']} has unsupported load_mode '{load_mode}'")
@@ -539,6 +696,14 @@ def validate_workload(config: dict[str, Any]) -> None:
                 raise ValueError(f"open-loop run {run['name']} must have arrival_rate_rps > 0")
             if int(run.get("max_in_flight", 0)) < 1:
                 raise ValueError(f"open-loop run {run['name']} must have max_in_flight >= 1")
+            arrival_pattern = run.get("arrival_pattern", "steady")
+            if arrival_pattern not in {"steady", "bursty"}:
+                raise ValueError(
+                    f"open-loop run {run['name']} has unsupported arrival_pattern "
+                    f"'{arrival_pattern}'"
+                )
+            if arrival_pattern == "bursty" and int(run.get("burst_size", 0)) < 2:
+                raise ValueError(f"bursty run {run['name']} must have burst_size >= 2")
 
 
 def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
@@ -549,16 +714,28 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
             {
                 "name": run["name"],
                 "load_mode": run.get("load_mode", "closed_loop"),
+                "arrival_pattern": (
+                    run.get("arrival_pattern", "steady")
+                    if run.get("load_mode", "closed_loop") == "open_loop"
+                    else "closed_loop"
+                ),
                 "request_count": int(run["request_count"]),
                 "concurrency": int(run["concurrency"]) if "concurrency" in run else None,
                 "arrival_rate_rps": safe_float(run.get("arrival_rate_rps")),
+                "burst_size": int(run["burst_size"]) if "burst_size" in run else None,
                 "max_in_flight": int(run["max_in_flight"]) if "max_in_flight" in run else None,
-                "prompt_words": int(run.get("prompt_words", 256)),
+                "prompt_tokens": int(run["prompt_tokens"]) if "prompt_tokens" in run else None,
+                "prompt_words": int(run["prompt_words"]) if "prompt_words" in run else None,
                 "max_tokens": int(run["max_tokens"]),
+                "output_tokens_target": (
+                    int(run["output_tokens_target"])
+                    if "output_tokens_target" in run
+                    else None
+                ),
                 "timeout_seconds": float(run.get("timeout_seconds", 120)),
                 "extra_body_keys": sorted((run.get("extra_body") or {}).keys()),
                 "example_prompt_estimated_tokens": estimate_tokens(
-                    generated_prompt(int(run.get("prompt_words", 256)), 0)
+                    prompt_for_workload(run, 0)
                 ),
             }
             for run in config["runs"]
@@ -577,6 +754,13 @@ def run_benchmark(args: argparse.Namespace) -> int:
     base_url = os.environ.get("VLLM_BASE_URL") or config.get("base_url", "http://localhost:8000")
     api_key = os.environ.get("OPENAI_API_KEY") or config.get("api_key", "EMPTY")
     endpoint = base_url.rstrip("/") + "/v1/chat/completions"
+    gpu_hourly_cost_usd = safe_float(
+        getattr(args, "gpu_hourly_cost_usd", None)
+        if getattr(args, "gpu_hourly_cost_usd", None) is not None
+        else os.environ.get("GPU_HOURLY_COST_USD", config.get("gpu_hourly_cost_usd"))
+    )
+    if gpu_hourly_cost_usd is not None and gpu_hourly_cost_usd < 0:
+        raise ValueError("gpu_hourly_cost_usd must be >= 0")
 
     if args.dry_run:
         dry_run(config, model, base_url.rstrip("/"))
@@ -600,6 +784,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 "base_url": base_url.rstrip("/"),
                 "workload_file": str(Path(args.workload)),
                 "workload_description": config.get("description"),
+                "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
             },
             indent=2,
         ),
@@ -614,6 +799,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
         with request_log_path.open("w", encoding="utf-8") as request_log:
             for workload in config["runs"]:
                 workload_name = workload["name"]
+                sampler.set_workload(workload_name)
                 request_count = int(workload["request_count"])
                 load_mode = workload.get("load_mode", "closed_loop")
                 concurrency = (
@@ -627,9 +813,8 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 with ThreadPoolExecutor(max_workers=concurrency) as executor:
                     futures = []
                     if load_mode == "open_loop":
-                        arrival_rate_rps = float(workload["arrival_rate_rps"])
                         for index in range(request_count):
-                            scheduled_offset_s = index / arrival_rate_rps
+                            scheduled_offset_s = scheduled_offset_for_request(workload, index)
                             sleep_s = workload_started + scheduled_offset_s - time.perf_counter()
                             if sleep_s > 0:
                                 time.sleep(sleep_s)
@@ -666,6 +851,11 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                 "workload": workload_name,
                                 "model": model,
                                 "load_mode": load_mode,
+                                "arrival_pattern": (
+                                    workload.get("arrival_pattern", "steady")
+                                    if load_mode == "open_loop"
+                                    else "closed_loop"
+                                ),
                                 "concurrency": (
                                     int(workload["concurrency"])
                                     if load_mode == "closed_loop"
@@ -678,7 +868,16 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                 ),
                                 "max_in_flight": concurrency,
                                 "requested_max_tokens": int(workload["max_tokens"]),
-                                "prompt_words": int(workload.get("prompt_words", 256)),
+                                "prompt_tokens_target": (
+                                    int(workload["prompt_tokens"])
+                                    if "prompt_tokens" in workload
+                                    else None
+                                ),
+                                "prompt_words": (
+                                    int(workload["prompt_words"])
+                                    if "prompt_words" in workload
+                                    else None
+                                ),
                             }
                         )
                         workload_results.append(result)
@@ -686,7 +885,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         request_log.flush()
 
                 wall_time_s = time.perf_counter() - workload_started
-                gpu_summary = load_gpu_summary(gpu_path)
+                gpu_summary = load_gpu_summary(gpu_path, workload_name)
                 summary_rows.append(
                     summarize_workload(
                         workload_name,
@@ -694,6 +893,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         workload_results,
                         wall_time_s,
                         gpu_summary,
+                        gpu_hourly_cost_usd,
                     )
                 )
     finally:
@@ -716,6 +916,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--gpu-sample-interval", type=float, default=2.0)
+    parser.add_argument(
+        "--gpu-hourly-cost-usd",
+        type=float,
+        help="Optional effective GPU hourly cost used for cost-per-token estimates.",
+    )
     return parser.parse_args()
 
 

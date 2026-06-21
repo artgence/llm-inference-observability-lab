@@ -11,6 +11,14 @@ from typing import Any
 
 DEFAULT_COLUMNS = [
     "workload",
+    "load_mode",
+    "arrival_pattern",
+    "burst_size",
+    "concurrency",
+    "prompt_tokens_target",
+    "max_tokens",
+    "output_tokens_target",
+    "target_request_rate_rps",
     "success_count",
     "error_count",
     "timeout_count",
@@ -20,12 +28,19 @@ DEFAULT_COLUMNS = [
     "latency_p95_s",
     "latency_p99_s",
     "ttft_p50_s",
+    "ttft_p95_s",
     "tpot_p50_s",
+    "tpot_p95_s",
+    "prompt_tokens_avg",
+    "output_tokens_avg",
     "requests_per_sec",
     "output_tokens_per_sec",
     "total_tokens_per_sec",
     "gpu_memory_used_mb_max",
+    "gpu_memory_utilization_pct_max",
     "gpu_utilization_pct_avg",
+    "cost_per_1m_output_tokens_usd",
+    "cost_per_1m_total_tokens_usd",
 ]
 
 

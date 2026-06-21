@@ -1,0 +1,50 @@
+{
+  "description": "Month 2 output-length sweep at the Month 1 operating point of 18 steady open-loop RPS with a fixed 512-token prompt target.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "runs": [
+    {
+      "name": "m2_output_rps18_p512_o128",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing prefill, decode, queueing, batching, and GPU memory. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 180
+    },
+    {
+      "name": "m2_output_rps18_p512_o512",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 512,
+      "output_tokens_target": 512,
+      "response_instruction": "Write approximately 512 output tokens analyzing prefill, decode, queueing, batching, and GPU memory in detail. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m2_output_rps18_p512_o1024",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 1024,
+      "output_tokens_target": 1024,
+      "response_instruction": "Write approximately 1024 output tokens analyzing prefill, decode, queueing, batching, and GPU memory in depth. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 480
+    }
+  ]
+}
