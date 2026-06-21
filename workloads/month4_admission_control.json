@@ -1,0 +1,59 @@
+{
+  "description": "Month 4 mixed-length admission-control simulation comparing uncontrolled, rejected, and truncated oversized prompts.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "m4_admission_uncontrolled_rps5",
+      "analysis_group": "admission_control",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 5,
+      "request_count": 100,
+      "max_in_flight": 128,
+      "prompt_tokens_pattern": [512, 512, 2048, 15360],
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "m4_admission_reject_over8192_rps5",
+      "analysis_group": "admission_control",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 5,
+      "request_count": 100,
+      "max_in_flight": 128,
+      "prompt_tokens_pattern": [512, 512, 2048, 15360],
+      "admission_control": {
+        "max_prompt_tokens": 8192,
+        "action": "reject"
+      },
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "m4_admission_truncate_over8192_rps5",
+      "analysis_group": "admission_control",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 5,
+      "request_count": 100,
+      "max_in_flight": 128,
+      "prompt_tokens_pattern": [512, 512, 2048, 15360],
+      "admission_control": {
+        "max_prompt_tokens": 8192,
+        "action": "truncate"
+      },
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    }
+  ]
+}

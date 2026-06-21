@@ -30,7 +30,27 @@ VLLM_METRICS = {
     "vllm:prompt_tokens_total",
     "vllm:generation_tokens_total",
     "vllm:request_success_total",
+    "vllm:prefix_cache_hits",
+    "vllm:prefix_cache_queries",
+    "vllm:prompt_tokens_cached",
+    "vllm:num_preemptions",
 }
+
+SERVER_SETTING_ENV_KEYS = [
+    "ENABLE_PREFIX_CACHING",
+    "ENABLE_CHUNKED_PREFILL",
+    "MAX_MODEL_LEN",
+    "MAX_NUM_SEQS",
+    "MAX_NUM_BATCHED_TOKENS",
+    "MAX_NUM_PARTIAL_PREFILLS",
+    "MAX_LONG_PARTIAL_PREFILLS",
+    "LONG_PREFILL_TOKEN_THRESHOLD",
+    "GPU_MEMORY_UTILIZATION",
+    "KV_CACHE_DTYPE",
+    "QUANTIZATION",
+    "TENSOR_PARALLEL_SIZE",
+    "CPU_OFFLOAD_GB",
+]
 
 
 VOCAB = [
@@ -101,15 +121,80 @@ def generated_prompt_for_token_target(
     return prefix + filler + suffix
 
 
-def prompt_for_workload(workload: dict[str, Any], request_index: int) -> str:
+def prompt_token_target_for_request(
+    workload: dict[str, Any], request_index: int
+) -> int | None:
+    pattern = workload.get("prompt_tokens_pattern")
+    if pattern:
+        return int(pattern[request_index % len(pattern)])
+    if workload.get("prompt_tokens") is not None:
+        return int(workload["prompt_tokens"])
+    return None
+
+
+def text_with_exact_length(seed: str, target_chars: int) -> str:
+    if target_chars <= 0:
+        return ""
+    repetitions = math.ceil(target_chars / len(seed))
+    return (seed * repetitions)[:target_chars]
+
+
+def generated_prefix_cache_prompt(
+    token_count: int,
+    shared_prefix_tokens: int,
+    request_index: int,
+    prefix_mode: str,
+    response_instruction: str,
+) -> str:
+    """Build equal-sized prompts whose long prefix is either shared or request-unique."""
+    target_chars = token_count * 4
+    shared_chars = min(shared_prefix_tokens * 4, target_chars)
+    if prefix_mode == "shared":
+        prefix_seed = (
+            "Shared operating manual: capacity latency throughput queueing prefill "
+            "decode memory batching telemetry cache. "
+        )
+    else:
+        prefix_seed = (
+            f"Unique request {request_index}: capacity latency throughput queueing "
+            "prefill decode memory batching telemetry cache. "
+        )
+    prefix = text_with_exact_length(prefix_seed, shared_chars)
+    suffix_seed = (
+        f"\nRequest id: {request_index}\nQuestion: {response_instruction}\n"
+        "Return a deterministic operational analysis. "
+    )
+    suffix = text_with_exact_length(suffix_seed, target_chars - len(prefix))
+    return prefix + suffix
+
+
+def prompt_for_workload(
+    workload: dict[str, Any],
+    request_index: int,
+    prompt_tokens_override: int | None = None,
+) -> str:
     if workload.get("prompt"):
         return str(workload["prompt"])
     response_instruction = str(
         workload.get("response_instruction", DEFAULT_RESPONSE_INSTRUCTION)
     )
-    if workload.get("prompt_tokens") is not None:
+    prompt_tokens = (
+        prompt_tokens_override
+        if prompt_tokens_override is not None
+        else prompt_token_target_for_request(workload, request_index)
+    )
+    prefix_mode = workload.get("prefix_mode")
+    if prompt_tokens is not None and prefix_mode in {"shared", "unique"}:
+        return generated_prefix_cache_prompt(
+            prompt_tokens,
+            int(workload.get("shared_prefix_tokens", 0)),
+            request_index,
+            str(prefix_mode),
+            response_instruction,
+        )
+    if prompt_tokens is not None:
         return generated_prompt_for_token_target(
-            int(workload["prompt_tokens"]),
+            prompt_tokens,
             request_index,
             response_instruction,
         )
@@ -282,6 +367,7 @@ class VllmMetricsSampler:
         self.thread: threading.Thread | None = None
         self.workload_name = "unassigned"
         self.workload_lock = threading.Lock()
+        self.sample_lock = threading.Lock()
 
     def set_workload(self, workload_name: str) -> None:
         with self.workload_lock:
@@ -302,7 +388,14 @@ class VllmMetricsSampler:
             self._sample_once()
             self.stop_event.wait(self.interval_seconds)
 
+    def sample_now(self) -> None:
+        self._sample_once()
+
     def _sample_once(self) -> None:
+        with self.sample_lock:
+            self._sample_once_locked()
+
+    def _sample_once_locked(self) -> None:
         collected_at = utc_now()
         with self.workload_lock:
             workload_name = self.workload_name
@@ -440,7 +533,85 @@ def post_streaming_chat(
     workload_started_perf: float | None = None,
     scheduled_offset_s: float | None = None,
 ) -> dict[str, Any]:
-    prompt = prompt_for_workload(workload, request_index)
+    original_prompt_target = prompt_token_target_for_request(workload, request_index)
+    effective_prompt_target = original_prompt_target
+    admission_action = "none"
+    admission_control = workload.get("admission_control") or {}
+    max_admitted_prompt_tokens = (
+        int(admission_control["max_prompt_tokens"])
+        if admission_control.get("max_prompt_tokens") is not None
+        else None
+    )
+
+    def scheduling_fields(
+        request_started_perf: float, ended_perf: float, latency_origin: str
+    ) -> dict[str, Any]:
+        request_start_offset_s = (
+            request_started_perf - workload_started_perf
+            if workload_started_perf is not None
+            else None
+        )
+        scheduler_delay_s = (
+            max(0.0, request_start_offset_s - scheduled_offset_s)
+            if request_start_offset_s is not None and scheduled_offset_s is not None
+            else None
+        )
+        scheduled_latency_s = (
+            ended_perf - workload_started_perf - scheduled_offset_s
+            if workload_started_perf is not None and scheduled_offset_s is not None
+            else None
+        )
+        return {
+            "latency_origin": latency_origin,
+            "scheduled_offset_s": scheduled_offset_s,
+            "request_start_offset_s": request_start_offset_s,
+            "scheduler_delay_s": scheduler_delay_s,
+            "scheduled_latency_s": scheduled_latency_s,
+        }
+
+    if (
+        original_prompt_target is not None
+        and max_admitted_prompt_tokens is not None
+        and original_prompt_target > max_admitted_prompt_tokens
+    ):
+        admission_action = str(admission_control.get("action", "reject"))
+        if admission_action == "truncate":
+            effective_prompt_target = max_admitted_prompt_tokens
+        else:
+            decided_perf = time.perf_counter()
+            return {
+                "request_index": request_index,
+                "started_at": utc_now(),
+                "ended_at": utc_now(),
+                "success": False,
+                "status_code": None,
+                "error_type": "admission_rejected",
+                "error_message": (
+                    f"prompt target {original_prompt_target} exceeds admission limit "
+                    f"{max_admitted_prompt_tokens}"
+                ),
+                "latency_s": 0.0,
+                **scheduling_fields(
+                    decided_perf, decided_perf, "client_admission_decision"
+                ),
+                "timeout": False,
+                "oom": False,
+                "rejected": True,
+                "admission_action": "reject",
+                "original_prompt_tokens_target": original_prompt_target,
+                "effective_prompt_tokens_target": None,
+            }
+
+    prompt = prompt_for_workload(
+        workload,
+        request_index,
+        prompt_tokens_override=effective_prompt_target,
+    )
+    admission_fields = {
+        "admission_action": admission_action,
+        "original_prompt_tokens_target": original_prompt_target,
+        "effective_prompt_tokens_target": effective_prompt_target,
+    }
     timeout = float(workload.get("timeout_seconds", 120))
     ttft_s: float | None = None
     token_event_times: list[float] = []
@@ -467,28 +638,6 @@ def post_streaming_chat(
         },
         method="POST",
     )
-
-    def scheduling_fields(ended_perf: float) -> dict[str, Any]:
-        request_start_offset_s = (
-            started_perf - workload_started_perf if workload_started_perf is not None else None
-        )
-        scheduler_delay_s = (
-            max(0.0, request_start_offset_s - scheduled_offset_s)
-            if request_start_offset_s is not None and scheduled_offset_s is not None
-            else None
-        )
-        scheduled_latency_s = (
-            ended_perf - workload_started_perf - scheduled_offset_s
-            if workload_started_perf is not None and scheduled_offset_s is not None
-            else None
-        )
-        return {
-            "latency_origin": "request_send",
-            "scheduled_offset_s": scheduled_offset_s,
-            "request_start_offset_s": request_start_offset_s,
-            "scheduler_delay_s": scheduler_delay_s,
-            "scheduled_latency_s": scheduled_latency_s,
-        }
 
     started_at = utc_now()
     started_perf = time.perf_counter()
@@ -532,7 +681,8 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": body[:1000],
             "latency_s": ended_perf - started_perf,
-            **scheduling_fields(ended_perf),
+            **scheduling_fields(started_perf, ended_perf, "request_send"),
+            **admission_fields,
             "timeout": error_type == "timeout",
             "oom": error_type == "oom",
             "rejected": error_type == "rejected",
@@ -550,7 +700,8 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": message[:1000],
             "latency_s": ended_perf - started_perf,
-            **scheduling_fields(ended_perf),
+            **scheduling_fields(started_perf, ended_perf, "request_send"),
+            **admission_fields,
             "timeout": error_type == "timeout",
             "oom": error_type == "oom",
             "rejected": error_type == "rejected",
@@ -568,7 +719,8 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": message[:1000],
             "latency_s": ended_perf - started_perf,
-            **scheduling_fields(ended_perf),
+            **scheduling_fields(started_perf, ended_perf, "request_send"),
+            **admission_fields,
             "timeout": error_type == "timeout",
             "oom": error_type == "oom",
             "rejected": error_type == "rejected",
@@ -610,7 +762,8 @@ def post_streaming_chat(
         "success": True,
         "status_code": status_code,
         "latency_s": ended_perf - started_perf,
-        **scheduling_fields(ended_perf),
+        **scheduling_fields(started_perf, ended_perf, "request_send"),
+        **admission_fields,
         "ttft_s": ttft_s,
         "tpot_s": tpot_s,
         "inter_token_latency_s": inter_token_latency_s,
@@ -667,6 +820,11 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
             "vllm_requests_running_max": None,
             "vllm_requests_waiting_max": None,
             "vllm_kv_cache_usage_pct_max": None,
+            "vllm_prefix_cache_hit_rate": None,
+            "vllm_prefix_cache_hit_tokens": None,
+            "vllm_prefix_cache_query_tokens": None,
+            "vllm_prompt_tokens_cached": None,
+            "vllm_preemptions": None,
             "vllm_metrics_sample_errors": 0,
         }
     snapshots: list[dict[str, Any]] = []
@@ -692,10 +850,34 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
         present = [value * scale for value in values if value is not None]
         return max(present) if present else None
 
+    def counter_delta(metric: str) -> float | None:
+        values = [
+            safe_float(record.get("metrics", {}).get(metric))
+            for record in snapshots
+        ]
+        present = [value for value in values if value is not None]
+        if not present:
+            return None
+        if len(present) == 1:
+            return 0.0
+        return max(0.0, present[-1] - present[0])
+
+    prefix_hits = counter_delta("vllm:prefix_cache_hits")
+    prefix_queries = counter_delta("vllm:prefix_cache_queries")
+
     return {
         "vllm_requests_running_max": maximum("vllm:num_requests_running"),
         "vllm_requests_waiting_max": maximum("vllm:num_requests_waiting"),
         "vllm_kv_cache_usage_pct_max": maximum("vllm:kv_cache_usage_perc", 100),
+        "vllm_prefix_cache_hit_rate": (
+            prefix_hits / prefix_queries
+            if prefix_hits is not None and prefix_queries not in (None, 0)
+            else None
+        ),
+        "vllm_prefix_cache_hit_tokens": prefix_hits,
+        "vllm_prefix_cache_query_tokens": prefix_queries,
+        "vllm_prompt_tokens_cached": counter_delta("vllm:prompt_tokens_cached"),
+        "vllm_preemptions": counter_delta("vllm:num_preemptions"),
         "vllm_metrics_sample_errors": sample_errors,
     }
 
@@ -769,6 +951,12 @@ def summarize_workload(
         if estimated_gpu_cost_usd is not None and total_tokens > 0
         else None
     )
+    configured_prompt_targets = [
+        int(value) for value in (workload.get("prompt_tokens_pattern") or [])
+    ]
+    if not configured_prompt_targets and workload.get("prompt_tokens") is not None:
+        configured_prompt_targets = [int(workload["prompt_tokens"])]
+    admission_control = workload.get("admission_control") or {}
 
     return {
         "workload": workload_name,
@@ -782,8 +970,20 @@ def summarize_workload(
         "burst_size": int(workload["burst_size"]) if "burst_size" in workload else None,
         "concurrency": int(workload["concurrency"]) if "concurrency" in workload else None,
         "prompt_tokens_target": (
-            int(workload["prompt_tokens"]) if "prompt_tokens" in workload else None
+            configured_prompt_targets[0]
+            if len(set(configured_prompt_targets)) == 1
+            else None
         ),
+        "prompt_tokens_target_min": (
+            min(configured_prompt_targets) if configured_prompt_targets else None
+        ),
+        "prompt_tokens_target_max": (
+            max(configured_prompt_targets) if configured_prompt_targets else None
+        ),
+        "prefix_mode": workload.get("prefix_mode"),
+        "shared_prefix_tokens": workload.get("shared_prefix_tokens"),
+        "admission_control_action": admission_control.get("action"),
+        "admission_max_prompt_tokens": admission_control.get("max_prompt_tokens"),
         "prompt_words": int(workload["prompt_words"]) if "prompt_words" in workload else None,
         "max_tokens": int(workload["max_tokens"]),
         "output_tokens_target": (
@@ -801,6 +1001,9 @@ def summarize_workload(
         "timeout_count": sum(1 for row in results if row.get("timeout")),
         "oom_count": sum(1 for row in results if row.get("oom")),
         "rejected_count": sum(1 for row in results if row.get("rejected")),
+        "admission_rejected_count": sum(
+            1 for row in results if row.get("error_type") == "admission_rejected"
+        ),
         "error_rate": (request_count - success_count) / request_count if request_count else None,
         "timeout_rate": sum(1 for row in results if row.get("timeout")) / request_count if request_count else None,
         "latency_p50_s": percentile(latencies, 0.50),
@@ -835,6 +1038,19 @@ def summarize_workload(
         "vllm_kv_cache_usage_pct_max": vllm_metrics_summary.get(
             "vllm_kv_cache_usage_pct_max"
         ),
+        "vllm_prefix_cache_hit_rate": vllm_metrics_summary.get(
+            "vllm_prefix_cache_hit_rate"
+        ),
+        "vllm_prefix_cache_hit_tokens": vllm_metrics_summary.get(
+            "vllm_prefix_cache_hit_tokens"
+        ),
+        "vllm_prefix_cache_query_tokens": vllm_metrics_summary.get(
+            "vllm_prefix_cache_query_tokens"
+        ),
+        "vllm_prompt_tokens_cached": vllm_metrics_summary.get(
+            "vllm_prompt_tokens_cached"
+        ),
+        "vllm_preemptions": vllm_metrics_summary.get("vllm_preemptions"),
         "vllm_metrics_sample_errors": vllm_metrics_summary.get(
             "vllm_metrics_sample_errors"
         ),
@@ -872,6 +1088,12 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "burst_size",
         "concurrency",
         "prompt_tokens_target",
+        "prompt_tokens_target_min",
+        "prompt_tokens_target_max",
+        "prefix_mode",
+        "shared_prefix_tokens",
+        "admission_control_action",
+        "admission_max_prompt_tokens",
         "max_tokens",
         "output_tokens_target",
         "target_request_rate_rps",
@@ -883,6 +1105,7 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "timeout_count",
         "oom_count",
         "rejected_count",
+        "admission_rejected_count",
         "error_rate",
         "timeout_rate",
         "latency_p50_s",
@@ -903,6 +1126,11 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "vllm_requests_running_max",
         "vllm_requests_waiting_max",
         "vllm_kv_cache_usage_pct_max",
+        "vllm_prefix_cache_hit_rate",
+        "vllm_prefix_cache_hit_tokens",
+        "vllm_prefix_cache_query_tokens",
+        "vllm_prompt_tokens_cached",
+        "vllm_preemptions",
         "vllm_metrics_sample_errors",
         "gpu_hourly_cost_usd",
         "cost_per_1m_output_tokens_usd",
@@ -937,17 +1165,72 @@ def validate_workload(config: dict[str, Any]) -> None:
         if run["name"] in names:
             raise ValueError(f"duplicate workload name '{run['name']}'")
         names.add(run["name"])
+        prompt_pattern = run.get("prompt_tokens_pattern")
+        if prompt_pattern is not None:
+            if not isinstance(prompt_pattern, list) or not prompt_pattern:
+                raise ValueError(
+                    f"run {run['name']} prompt_tokens_pattern must be a non-empty list"
+                )
+            if "prompt_tokens" in run:
+                raise ValueError(
+                    f"run {run['name']} cannot define both prompt_tokens and "
+                    "prompt_tokens_pattern"
+                )
+            if any(int(value) < 1 for value in prompt_pattern):
+                raise ValueError(
+                    f"run {run['name']} prompt_tokens_pattern values must be >= 1"
+                )
         if "prompt_tokens" in run and int(run["prompt_tokens"]) < 1:
             raise ValueError(f"run {run['name']} must have prompt_tokens >= 1")
         if "output_tokens_target" in run and int(run["output_tokens_target"]) < 1:
             raise ValueError(f"run {run['name']} must have output_tokens_target >= 1")
-        if max_model_len is not None and "prompt_tokens" in run:
-            target_context_tokens = int(run["prompt_tokens"]) + int(run["max_tokens"])
+        configured_prompt_targets = [int(value) for value in (prompt_pattern or [])]
+        if not configured_prompt_targets and "prompt_tokens" in run:
+            configured_prompt_targets = [int(run["prompt_tokens"])]
+        if max_model_len is not None and configured_prompt_targets:
+            target_context_tokens = max(configured_prompt_targets) + int(run["max_tokens"])
             if target_context_tokens >= max_model_len:
                 raise ValueError(
                     f"run {run['name']} targets {target_context_tokens} prompt plus "
                     f"output tokens; this must be less than max_model_len "
                     f"{max_model_len}"
+                )
+        prefix_mode = run.get("prefix_mode")
+        if prefix_mode is not None and prefix_mode not in {"shared", "unique"}:
+            raise ValueError(
+                f"run {run['name']} prefix_mode must be 'shared' or 'unique'"
+            )
+        if prefix_mode is not None:
+            shared_prefix_tokens = int(run.get("shared_prefix_tokens", 0))
+            if shared_prefix_tokens < 1:
+                raise ValueError(
+                    f"run {run['name']} must define shared_prefix_tokens >= 1"
+                )
+            if configured_prompt_targets and shared_prefix_tokens >= min(
+                configured_prompt_targets
+            ):
+                raise ValueError(
+                    f"run {run['name']} shared_prefix_tokens must be smaller than "
+                    "every prompt target"
+                )
+        admission_control = run.get("admission_control")
+        if admission_control is not None:
+            if not isinstance(admission_control, dict):
+                raise ValueError(f"run {run['name']} admission_control must be an object")
+            action = admission_control.get("action", "reject")
+            if action not in {"reject", "truncate"}:
+                raise ValueError(
+                    f"run {run['name']} admission action must be reject or truncate"
+                )
+            max_admitted_prompt_tokens = safe_float(
+                admission_control.get("max_prompt_tokens")
+            )
+            if (
+                max_admitted_prompt_tokens is None
+                or max_admitted_prompt_tokens < 1
+            ):
+                raise ValueError(
+                    f"run {run['name']} admission max_prompt_tokens must be >= 1"
                 )
         load_mode = run.get("load_mode", "closed_loop")
         if load_mode not in {"closed_loop", "open_loop"}:
@@ -995,21 +1278,41 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
                 "arrival_rate_rps": safe_float(run.get("arrival_rate_rps")),
                 "burst_size": int(run["burst_size"]) if "burst_size" in run else None,
                 "max_in_flight": int(run["max_in_flight"]) if "max_in_flight" in run else None,
-                "prompt_tokens": int(run["prompt_tokens"]) if "prompt_tokens" in run else None,
+                "prompt_tokens": prompt_token_target_for_request(run, 0),
+                "prompt_tokens_pattern": run.get("prompt_tokens_pattern"),
                 "prompt_words": int(run["prompt_words"]) if "prompt_words" in run else None,
                 "max_tokens": int(run["max_tokens"]),
                 "target_context_tokens": (
-                    int(run["prompt_tokens"]) + int(run["max_tokens"])
-                    if "prompt_tokens" in run
+                    max(
+                        int(value)
+                        for value in (
+                            run.get("prompt_tokens_pattern")
+                            or [run.get("prompt_tokens")]
+                        )
+                        if value is not None
+                    )
+                    + int(run["max_tokens"])
+                    if run.get("prompt_tokens_pattern") or "prompt_tokens" in run
                     else None
                 ),
                 "context_headroom_tokens": (
                     int(config["max_model_len"])
-                    - int(run["prompt_tokens"])
+                    - max(
+                        int(value)
+                        for value in (
+                            run.get("prompt_tokens_pattern")
+                            or [run.get("prompt_tokens")]
+                        )
+                        if value is not None
+                    )
                     - int(run["max_tokens"])
-                    if "max_model_len" in config and "prompt_tokens" in run
+                    if "max_model_len" in config
+                    and (run.get("prompt_tokens_pattern") or "prompt_tokens" in run)
                     else None
                 ),
+                "prefix_mode": run.get("prefix_mode"),
+                "shared_prefix_tokens": run.get("shared_prefix_tokens"),
+                "admission_control": run.get("admission_control"),
                 "output_tokens_target": (
                     int(run["output_tokens_target"])
                     if "output_tokens_target" in run
@@ -1076,6 +1379,15 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 "workload_file": str(Path(args.workload)),
                 "workload_description": config.get("description"),
                 "max_model_len": config.get("max_model_len"),
+                "server_config_label": (
+                    getattr(args, "server_config_label", None)
+                    or os.environ.get("VLLM_SERVER_CONFIG_LABEL")
+                ),
+                "server_settings": {
+                    key: os.environ[key]
+                    for key in SERVER_SETTING_ENV_KEYS
+                    if key in os.environ
+                },
                 "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
                 "vllm_metrics_sampling_enabled": not getattr(
                     args, "disable_vllm_metrics_sampling", False
@@ -1128,6 +1440,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 gpu_sampler.set_workload(workload_name)
                 if vllm_sampler is not None:
                     vllm_sampler.set_workload(workload_name)
+                    vllm_sampler.sample_now()
                 request_count = int(workload["request_count"])
                 load_mode = workload.get("load_mode", "closed_loop")
                 concurrency = (
@@ -1215,10 +1528,9 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                 "max_in_flight": concurrency,
                                 "requested_max_tokens": int(workload["max_tokens"]),
                                 "prompt_tokens_target": (
-                                    int(workload["prompt_tokens"])
-                                    if "prompt_tokens" in workload
-                                    else None
+                                    prompt_token_target_for_request(workload, index)
                                 ),
+                                "prefix_mode": workload.get("prefix_mode"),
                                 "prompt_words": (
                                     int(workload["prompt_words"])
                                     if "prompt_words" in workload
@@ -1231,6 +1543,8 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         request_log.flush()
 
                 wall_time_s = time.perf_counter() - workload_started
+                if vllm_sampler is not None:
+                    vllm_sampler.sample_now()
                 gpu_summary = load_gpu_summary(gpu_path, workload_name)
                 vllm_metrics_summary = load_vllm_metrics_summary(
                     vllm_metrics_path, workload_name
@@ -1268,6 +1582,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workload", default="workloads/month1_baseline.json")
     parser.add_argument("--out-dir", default="benchmarks")
     parser.add_argument("--run-id")
+    parser.add_argument(
+        "--server-config-label",
+        help="Label recorded in metadata for cross-run serving-knob comparisons.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--gpu-sample-interval", type=float, default=2.0)
     parser.add_argument("--vllm-metrics-interval", type=float, default=2.0)

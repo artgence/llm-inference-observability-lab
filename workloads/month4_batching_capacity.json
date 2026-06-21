@@ -1,0 +1,53 @@
+{
+  "description": "Month 4 continuous-batching capacity sweep across client concurrency.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "m4_batching_c1_p512_o128",
+      "analysis_group": "batching_capacity",
+      "request_count": 20,
+      "concurrency": 1,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 240
+    },
+    {
+      "name": "m4_batching_c8_p512_o128",
+      "analysis_group": "batching_capacity",
+      "request_count": 80,
+      "concurrency": 8,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 240
+    },
+    {
+      "name": "m4_batching_c32_p512_o128",
+      "analysis_group": "batching_capacity",
+      "request_count": 320,
+      "concurrency": 32,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m4_batching_c64_p512_o128",
+      "analysis_group": "batching_capacity",
+      "request_count": 640,
+      "concurrency": 64,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 420
+    }
+  ]
+}

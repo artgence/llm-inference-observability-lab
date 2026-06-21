@@ -1,0 +1,42 @@
+{
+  "description": "Month 4 quantized 70B-class serving baseline; requires at least two L40S GPUs for the FP8 checkpoint.",
+  "model": "neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "m4_70b_fp8_c1_p512_o128",
+      "analysis_group": "quantized_70b",
+      "request_count": 10,
+      "concurrency": 1,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "m4_70b_fp8_c4_p512_o128",
+      "analysis_group": "quantized_70b",
+      "request_count": 40,
+      "concurrency": 4,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "m4_70b_fp8_c8_p512_o128",
+      "analysis_group": "quantized_70b",
+      "request_count": 80,
+      "concurrency": 8,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "description": "Month 4 prefix-caching experiment using equal-sized unique and repeated 1,536-token prefixes.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "m4_prefix_unique_p2048_o128_rps5",
+      "analysis_group": "prefix_cache",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 5,
+      "request_count": 100,
+      "max_in_flight": 64,
+      "prompt_tokens": 2048,
+      "prefix_mode": "unique",
+      "shared_prefix_tokens": 1536,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m4_prefix_shared_p2048_o128_rps5",
+      "analysis_group": "prefix_cache",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 5,
+      "request_count": 100,
+      "max_in_flight": 64,
+      "prompt_tokens": 2048,
+      "prefix_mode": "shared",
+      "shared_prefix_tokens": 1536,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    }
+  ]
+}
