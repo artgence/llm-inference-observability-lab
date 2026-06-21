@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import http.server
 import json
 import math
 import os
@@ -16,9 +17,20 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+
+
+VLLM_METRICS = {
+    "vllm:num_requests_running",
+    "vllm:num_requests_waiting",
+    "vllm:kv_cache_usage_perc",
+    "vllm:prompt_tokens_total",
+    "vllm:generation_tokens_total",
+    "vllm:request_success_total",
+}
 
 
 VOCAB = [
@@ -232,6 +244,191 @@ class GpuSampler:
             with self.output_path.open("a", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
                 writer.writerows(rows)
+
+
+def parse_prometheus_metrics(text: str) -> dict[str, float]:
+    metrics: dict[str, float] = defaultdict(float)
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.rsplit(None, 1)
+        if len(parts) != 2:
+            continue
+        metric_with_labels, raw_value = parts
+        metric_name = metric_with_labels.split("{", 1)[0]
+        if metric_name not in VLLM_METRICS:
+            continue
+        try:
+            metrics[metric_name] += float(raw_value)
+        except ValueError:
+            continue
+    return dict(metrics)
+
+
+class VllmMetricsSampler:
+    def __init__(
+        self,
+        metrics_url: str,
+        output_path: Path,
+        run_id: str,
+        interval_seconds: float,
+    ) -> None:
+        self.metrics_url = metrics_url
+        self.output_path = output_path
+        self.run_id = run_id
+        self.interval_seconds = interval_seconds
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.workload_name = "unassigned"
+        self.workload_lock = threading.Lock()
+
+    def set_workload(self, workload_name: str) -> None:
+        with self.workload_lock:
+            self.workload_name = workload_name
+
+    def start(self) -> None:
+        self.output_path.write_text("", encoding="utf-8")
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=self.interval_seconds + 2)
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            self._sample_once()
+            self.stop_event.wait(self.interval_seconds)
+
+    def _sample_once(self) -> None:
+        collected_at = utc_now()
+        with self.workload_lock:
+            workload_name = self.workload_name
+        record: dict[str, Any] = {
+            "collected_at": collected_at,
+            "collected_at_epoch_s": time.time(),
+            "run_id": self.run_id,
+            "workload": workload_name,
+        }
+        try:
+            with urllib.request.urlopen(self.metrics_url, timeout=5) as response:
+                body = response.read().decode("utf-8", "replace")
+            record["metrics"] = parse_prometheus_metrics(body)
+        except Exception as exc:  # noqa: BLE001 - sampling must not fail the benchmark.
+            record["error"] = str(exc)[:500]
+        with self.output_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record) + "\n")
+
+
+def prometheus_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+class BenchmarkMetricsState:
+    def __init__(self, run_id: str, model: str) -> None:
+        self.run_id = run_id
+        self.model = model
+        self.lock = threading.Lock()
+        self.submitted: dict[str, int] = defaultdict(int)
+        self.inflight: dict[str, int] = defaultdict(int)
+        self.completed: dict[tuple[str, str], int] = defaultdict(int)
+        self.errors: dict[tuple[str, str], int] = defaultdict(int)
+
+    def mark_submitted(self, workload: str) -> None:
+        with self.lock:
+            self.submitted[workload] += 1
+            self.inflight[workload] += 1
+
+    def observe(self, workload: str, result: dict[str, Any]) -> None:
+        outcome = "success" if result.get("success") else "error"
+        error_type = str(result.get("error_type") or "none")
+        with self.lock:
+            self.inflight[workload] = max(0, self.inflight[workload] - 1)
+            self.completed[(workload, outcome)] += 1
+            if outcome == "error":
+                self.errors[(workload, error_type)] += 1
+
+    def render(self) -> str:
+        run_id = prometheus_escape(self.run_id)
+        model = prometheus_escape(self.model)
+        lines = [
+            "# HELP llm_benchmark_run_info Active benchmark run metadata.",
+            "# TYPE llm_benchmark_run_info gauge",
+            f'llm_benchmark_run_info{{run_id="{run_id}",model="{model}"}} 1',
+            "# HELP llm_benchmark_requests_submitted_total Submitted benchmark requests.",
+            "# TYPE llm_benchmark_requests_submitted_total counter",
+            "# HELP llm_benchmark_inflight_requests Submitted requests not yet completed.",
+            "# TYPE llm_benchmark_inflight_requests gauge",
+            "# HELP llm_benchmark_requests_completed_total Completed benchmark requests.",
+            "# TYPE llm_benchmark_requests_completed_total counter",
+            "# HELP llm_benchmark_errors_total Benchmark errors by classification.",
+            "# TYPE llm_benchmark_errors_total counter",
+        ]
+        with self.lock:
+            workloads = sorted(set(self.submitted) | set(self.inflight))
+            for workload in workloads:
+                escaped = prometheus_escape(workload)
+                labels = f'run_id="{run_id}",workload="{escaped}"'
+                lines.append(
+                    f"llm_benchmark_requests_submitted_total{{{labels}}} "
+                    f"{self.submitted[workload]}"
+                )
+                lines.append(
+                    f"llm_benchmark_inflight_requests{{{labels}}} {self.inflight[workload]}"
+                )
+            for (workload, outcome), count in sorted(self.completed.items()):
+                escaped = prometheus_escape(workload)
+                lines.append(
+                    "llm_benchmark_requests_completed_total{"
+                    f'run_id="{run_id}",workload="{escaped}",outcome="{outcome}"'
+                    f"}} {count}"
+                )
+            for (workload, error_type), count in sorted(self.errors.items()):
+                escaped = prometheus_escape(workload)
+                error = prometheus_escape(error_type)
+                lines.append(
+                    "llm_benchmark_errors_total{"
+                    f'run_id="{run_id}",workload="{escaped}",error_type="{error}"'
+                    f"}} {count}"
+                )
+        lines.append("")
+        return "\n".join(lines)
+
+
+class BenchmarkMetricsServer:
+    def __init__(self, state: BenchmarkMetricsState, host: str, port: int) -> None:
+        handler = self._handler_for(state)
+        self.server = http.server.ThreadingHTTPServer((host, port), handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @staticmethod
+    def _handler_for(state: BenchmarkMetricsState) -> type[http.server.BaseHTTPRequestHandler]:
+        class MetricsHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API.
+                if self.path != "/metrics":
+                    self.send_error(404)
+                    return
+                body = state.render().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                return
+
+        return MetricsHandler
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
 
 
 def post_streaming_chat(
@@ -464,12 +661,52 @@ def load_gpu_summary(gpu_path: Path, workload_name: str | None = None) -> dict[s
     }
 
 
+def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float | int | None]:
+    if not path.exists():
+        return {
+            "vllm_requests_running_max": None,
+            "vllm_requests_waiting_max": None,
+            "vllm_kv_cache_usage_pct_max": None,
+            "vllm_metrics_sample_errors": 0,
+        }
+    snapshots: list[dict[str, Any]] = []
+    sample_errors = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            sample_errors += 1
+            continue
+        if record.get("workload") != workload_name:
+            continue
+        if record.get("error"):
+            sample_errors += 1
+        elif record.get("metrics"):
+            snapshots.append(record)
+
+    def maximum(metric: str, scale: float = 1.0) -> float | None:
+        values = [
+            safe_float(record.get("metrics", {}).get(metric))
+            for record in snapshots
+        ]
+        present = [value * scale for value in values if value is not None]
+        return max(present) if present else None
+
+    return {
+        "vllm_requests_running_max": maximum("vllm:num_requests_running"),
+        "vllm_requests_waiting_max": maximum("vllm:num_requests_waiting"),
+        "vllm_kv_cache_usage_pct_max": maximum("vllm:kv_cache_usage_perc", 100),
+        "vllm_metrics_sample_errors": sample_errors,
+    }
+
+
 def summarize_workload(
     workload_name: str,
     workload: dict[str, Any],
     results: list[dict[str, Any]],
     wall_time_s: float,
     gpu_summary: dict[str, float | None],
+    vllm_metrics_summary: dict[str, float | int | None],
     gpu_hourly_cost_usd: float | None,
 ) -> dict[str, Any]:
     successes = [row for row in results if row.get("success")]
@@ -589,6 +826,18 @@ def summarize_workload(
             "gpu_memory_utilization_pct_max"
         ),
         "gpu_utilization_pct_avg": gpu_summary.get("gpu_utilization_pct_avg"),
+        "vllm_requests_running_max": vllm_metrics_summary.get(
+            "vllm_requests_running_max"
+        ),
+        "vllm_requests_waiting_max": vllm_metrics_summary.get(
+            "vllm_requests_waiting_max"
+        ),
+        "vllm_kv_cache_usage_pct_max": vllm_metrics_summary.get(
+            "vllm_kv_cache_usage_pct_max"
+        ),
+        "vllm_metrics_sample_errors": vllm_metrics_summary.get(
+            "vllm_metrics_sample_errors"
+        ),
         "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
         "estimated_gpu_cost_usd": estimated_gpu_cost_usd,
         "cost_per_1m_output_tokens_usd": cost_per_1m_output_tokens_usd,
@@ -651,6 +900,10 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "gpu_memory_used_mb_max",
         "gpu_memory_utilization_pct_max",
         "gpu_utilization_pct_avg",
+        "vllm_requests_running_max",
+        "vllm_requests_waiting_max",
+        "vllm_kv_cache_usage_pct_max",
+        "vllm_metrics_sample_errors",
         "gpu_hourly_cost_usd",
         "cost_per_1m_output_tokens_usd",
         "cost_per_1m_total_tokens_usd",
@@ -751,6 +1004,13 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
 def run_benchmark(args: argparse.Namespace) -> int:
     config = json.loads(Path(args.workload).read_text(encoding="utf-8"))
     validate_workload(config)
+    if args.gpu_sample_interval <= 0:
+        raise ValueError("gpu-sample-interval must be > 0")
+    if getattr(args, "vllm_metrics_interval", 2.0) <= 0:
+        raise ValueError("vllm-metrics-interval must be > 0")
+    metrics_export_port = getattr(args, "metrics_export_port", None)
+    if metrics_export_port is not None and not 1 <= metrics_export_port <= 65535:
+        raise ValueError("metrics-export-port must be between 1 and 65535")
 
     model = os.environ.get("SERVED_MODEL_NAME") or os.environ.get("MODEL_ID") or config.get("model")
     if not model:
@@ -775,6 +1035,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=False)
     request_log_path = run_dir / "requests.jsonl"
     gpu_path = run_dir / "gpu_metrics.csv"
+    vllm_metrics_path = run_dir / "vllm_metrics.jsonl"
     summary_csv_path = run_dir / "summary.csv"
     summary_md_path = run_dir / "summary.md"
     metadata_path = run_dir / "metadata.json"
@@ -789,21 +1050,57 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 "workload_file": str(Path(args.workload)),
                 "workload_description": config.get("description"),
                 "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
+                "vllm_metrics_sampling_enabled": not getattr(
+                    args, "disable_vllm_metrics_sampling", False
+                ),
+                "benchmark_metrics_export_port": getattr(
+                    args, "metrics_export_port", None
+                ),
             },
             indent=2,
         ),
         encoding="utf-8",
     )
 
-    sampler = GpuSampler(gpu_path, args.gpu_sample_interval)
-    sampler.start()
+    gpu_sampler = GpuSampler(gpu_path, args.gpu_sample_interval)
+    vllm_sampler = (
+        None
+        if getattr(args, "disable_vllm_metrics_sampling", False)
+        else VllmMetricsSampler(
+            base_url.rstrip("/") + "/metrics",
+            vllm_metrics_path,
+            run_id,
+            getattr(args, "vllm_metrics_interval", 2.0),
+        )
+    )
+    metrics_state = (
+        BenchmarkMetricsState(run_id, model)
+        if getattr(args, "metrics_export_port", None) is not None
+        else None
+    )
+    metrics_server = (
+        BenchmarkMetricsServer(
+            metrics_state,
+            getattr(args, "metrics_export_host", "0.0.0.0"),
+            int(args.metrics_export_port),
+        )
+        if metrics_state is not None
+        else None
+    )
+    gpu_sampler.start()
+    if vllm_sampler is not None:
+        vllm_sampler.start()
+    if metrics_server is not None:
+        metrics_server.start()
     summary_rows: list[dict[str, Any]] = []
 
     try:
         with request_log_path.open("w", encoding="utf-8") as request_log:
             for workload in config["runs"]:
                 workload_name = workload["name"]
-                sampler.set_workload(workload_name)
+                gpu_sampler.set_workload(workload_name)
+                if vllm_sampler is not None:
+                    vllm_sampler.set_workload(workload_name)
                 request_count = int(workload["request_count"])
                 load_mode = workload.get("load_mode", "closed_loop")
                 concurrency = (
@@ -816,6 +1113,23 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
                 with ThreadPoolExecutor(max_workers=concurrency) as executor:
                     futures = []
+
+                    def register_future(future: Any) -> Any:
+                        if metrics_state is not None:
+                            metrics_state.mark_submitted(workload_name)
+
+                            def observe_completed(completed: Any) -> None:
+                                try:
+                                    metrics_state.observe(workload_name, completed.result())
+                                except Exception as exc:  # noqa: BLE001
+                                    metrics_state.observe(
+                                        workload_name,
+                                        {"success": False, "error_type": type(exc).__name__},
+                                    )
+
+                            future.add_done_callback(observe_completed)
+                        return future
+
                     if load_mode == "open_loop":
                         for index in range(request_count):
                             scheduled_offset_s = scheduled_offset_for_request(workload, index)
@@ -823,7 +1137,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                             if sleep_s > 0:
                                 time.sleep(sleep_s)
                             futures.append(
-                                executor.submit(
+                                register_future(executor.submit(
                                     post_streaming_chat,
                                     endpoint,
                                     api_key,
@@ -832,11 +1146,11 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                     index,
                                     workload_started,
                                     scheduled_offset_s,
-                                )
+                                ))
                             )
                     else:
                         futures = [
-                            executor.submit(
+                            register_future(executor.submit(
                                 post_streaming_chat,
                                 endpoint,
                                 api_key,
@@ -844,7 +1158,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                 workload,
                                 index,
                                 workload_started,
-                            )
+                            ))
                             for index in range(request_count)
                         ]
                     for future in as_completed(futures):
@@ -891,6 +1205,9 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
                 wall_time_s = time.perf_counter() - workload_started
                 gpu_summary = load_gpu_summary(gpu_path, workload_name)
+                vllm_metrics_summary = load_vllm_metrics_summary(
+                    vllm_metrics_path, workload_name
+                )
                 summary_rows.append(
                     summarize_workload(
                         workload_name,
@@ -898,11 +1215,16 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         workload_results,
                         wall_time_s,
                         gpu_summary,
+                        vllm_metrics_summary,
                         gpu_hourly_cost_usd,
                     )
                 )
     finally:
-        sampler.stop()
+        if metrics_server is not None:
+            metrics_server.stop()
+        if vllm_sampler is not None:
+            vllm_sampler.stop()
+        gpu_sampler.stop()
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     metadata["ended_at"] = utc_now()
@@ -921,6 +1243,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--gpu-sample-interval", type=float, default=2.0)
+    parser.add_argument("--vllm-metrics-interval", type=float, default=2.0)
+    parser.add_argument("--disable-vllm-metrics-sampling", action="store_true")
+    parser.add_argument("--metrics-export-host", default="0.0.0.0")
+    parser.add_argument(
+        "--metrics-export-port",
+        type=int,
+        help="Optional port for live benchmark error/timeout/OOM Prometheus metrics.",
+    )
     parser.add_argument(
         "--gpu-hourly-cost-usd",
         type=float,

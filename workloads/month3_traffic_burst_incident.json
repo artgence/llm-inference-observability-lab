@@ -1,0 +1,71 @@
+{
+  "description": "Month 3 incident experiment: sudden request bursts at an average 18 RPS.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "runs": [
+    {
+      "name": "incident_burst_steady_rps18_p512_o128",
+      "analysis_group": "traffic_burst",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 240
+    },
+    {
+      "name": "incident_burst_16_rps18_p512_o128",
+      "analysis_group": "traffic_burst",
+      "load_mode": "open_loop",
+      "arrival_pattern": "bursty",
+      "arrival_rate_rps": 18,
+      "burst_size": 16,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 240
+    },
+    {
+      "name": "incident_burst_32_rps18_p512_o128",
+      "analysis_group": "traffic_burst",
+      "load_mode": "open_loop",
+      "arrival_pattern": "bursty",
+      "arrival_rate_rps": 18,
+      "burst_size": 32,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 240
+    },
+    {
+      "name": "incident_burst_64_rps18_p512_o128",
+      "analysis_group": "traffic_burst",
+      "load_mode": "open_loop",
+      "arrival_pattern": "bursty",
+      "arrival_rate_rps": 18,
+      "burst_size": 64,
+      "request_count": 360,
+      "max_in_flight": 256,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    }
+  ]
+}

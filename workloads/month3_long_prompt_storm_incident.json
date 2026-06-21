@@ -1,0 +1,38 @@
+{
+  "description": "Month 3 incident experiment: sustained 8K and 16K prompt storms.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "runs": [
+    {
+      "name": "incident_prompt_storm_p8192_o128_rps2",
+      "analysis_group": "long_prompt_storm",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 2,
+      "request_count": 40,
+      "max_in_flight": 128,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 420
+    },
+    {
+      "name": "incident_prompt_storm_p16384_o128_rps2",
+      "analysis_group": "long_prompt_storm",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 2,
+      "request_count": 40,
+      "max_in_flight": 128,
+      "prompt_tokens": 16384,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens analyzing the serving bottlenecks. Do not conclude early.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    }
+  ]
+}

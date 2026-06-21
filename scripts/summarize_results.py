@@ -40,6 +40,10 @@ DEFAULT_COLUMNS = [
     "gpu_memory_used_mb_max",
     "gpu_memory_utilization_pct_max",
     "gpu_utilization_pct_avg",
+    "vllm_requests_running_max",
+    "vllm_requests_waiting_max",
+    "vllm_kv_cache_usage_pct_max",
+    "vllm_metrics_sample_errors",
     "cost_per_1m_output_tokens_usd",
     "cost_per_1m_total_tokens_usd",
 ]

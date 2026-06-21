@@ -1,0 +1,44 @@
+{
+  "description": "Month 3 incident experiment: increase concurrent KV-cache demand using long prompts and outputs.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "runs": [
+    {
+      "name": "incident_memory_p8192_o1024_c8",
+      "analysis_group": "memory_pressure",
+      "request_count": 40,
+      "concurrency": 8,
+      "prompt_tokens": 8192,
+      "max_tokens": 1024,
+      "output_tokens_target": 1024,
+      "response_instruction": "Write approximately 1024 output tokens analyzing the serving bottlenecks in depth. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "incident_memory_p8192_o1024_c16",
+      "analysis_group": "memory_pressure",
+      "request_count": 80,
+      "concurrency": 16,
+      "prompt_tokens": 8192,
+      "max_tokens": 1024,
+      "output_tokens_target": 1024,
+      "response_instruction": "Write approximately 1024 output tokens analyzing the serving bottlenecks in depth. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "incident_memory_p8192_o1024_c32",
+      "analysis_group": "memory_pressure",
+      "request_count": 160,
+      "concurrency": 32,
+      "prompt_tokens": 8192,
+      "max_tokens": 1024,
+      "output_tokens_target": 1024,
+      "response_instruction": "Write approximately 1024 output tokens analyzing the serving bottlenecks in depth. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 900
+    }
+  ]
+}

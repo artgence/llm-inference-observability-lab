@@ -1,0 +1,55 @@
+groups:
+  - name: vllm-observability
+    rules:
+      - alert: VllmMetricsUnavailable
+        expr: up{job="vllm"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: vLLM metrics endpoint is unavailable
+
+      - alert: VllmRequestsQueued
+        expr: sum(vllm:num_requests_waiting) > 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: vLLM has requests waiting for execution
+
+      - alert: VllmKvCachePressure
+        expr: max(vllm:kv_cache_usage_perc) > 0.90
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: vLLM KV cache usage is above 90 percent
+
+      - alert: VllmTtftP95High
+        expr: histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[5m]))) > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: vLLM TTFT p95 is above two seconds
+
+      - alert: BenchmarkFailures
+        expr: increase(llm_benchmark_requests_completed_total{outcome="error"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Benchmark requests are failing
+
+      - alert: BenchmarkTimeouts
+        expr: increase(llm_benchmark_errors_total{error_type="timeout"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Benchmark requests are timing out
+
+      - alert: BenchmarkOom
+        expr: increase(llm_benchmark_errors_total{error_type="oom"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Benchmark observed an out-of-memory failure
