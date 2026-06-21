@@ -35,10 +35,10 @@ python3 scripts/benchmark_vllm.py \
 
 ## Incident 2: Long Prompt Storm
 
-Restart or recreate the serving container with sufficient context capacity. Do not run a second vLLM process while the existing PID 1 server still owns port 8000:
+Use the 16,384-token server limit for a 15,360-token prompt target and a 128-token output target. This leaves 896 tokens for the output and chat-template/token-estimation overhead. Restart or recreate the serving container first; do not run a second vLLM process while the existing PID 1 server still owns port 8000:
 
 ```bash
-MAX_MODEL_LEN=32768 scripts/start_vllm_server.sh
+MAX_MODEL_LEN=16384 scripts/start_vllm_server.sh
 ```
 
 Then run:

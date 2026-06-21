@@ -3,7 +3,7 @@ set -euo pipefail
 
 MODEL_ID="${MODEL_ID:-neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8}"
 PORT="${PORT:-8000}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"
 VLLM_BIN="${VLLM_BIN:-vllm}"
 
 args=(

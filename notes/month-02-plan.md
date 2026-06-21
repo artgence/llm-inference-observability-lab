@@ -17,7 +17,7 @@ Goal: use the Month 1 operating point of 18 RPS to determine how prompt length, 
 
 ## Server Prerequisite
 
-The default `MAX_MODEL_LEN=8192` has sufficient context capacity for the largest 1024-token prompt and 1024-token output stages, including chat-template overhead.
+The default `MAX_MODEL_LEN=16384` has sufficient context capacity for the largest 1024-token prompt and 1024-token output stages, including chat-template overhead.
 
 ## Run Sequence
 

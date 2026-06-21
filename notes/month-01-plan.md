@@ -59,7 +59,7 @@ python3 scripts/scrape_vllm_metrics.py --output benchmarks/metrics.prom
 
 ## Llama 3.1 Serving Notes
 
-For the first baseline, keep `MAX_MODEL_LEN=8192` unless the GPU host has enough memory for a larger KV cache. Llama 3.1 8B supports a native context length of 131,072 tokens; increase `MAX_MODEL_LEN` only after validating memory headroom on the target GPU. The model runs with `TENSOR_PARALLEL_SIZE=1` on a single L40S. Access to the gated model repository requires accepting Meta's license and authenticating with Hugging Face.
+The project now defaults to `MAX_MODEL_LEN=16384`; lower it explicitly if the baseline needs a smaller KV cache. Llama 3.1 8B supports a native context length of 131,072 tokens; increase beyond 16,384 only after validating memory headroom on the target GPU. The model runs with `TENSOR_PARALLEL_SIZE=1` on a single L40S. Access to the gated model repository requires accepting Meta's license and authenticating with Hugging Face.
 
 ## First Analysis Questions
 
