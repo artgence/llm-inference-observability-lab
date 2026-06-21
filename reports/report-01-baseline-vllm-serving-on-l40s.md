@@ -52,8 +52,11 @@ The baseline workload uses the model's standard instruct chat template with dete
 | open_loop_rps12_prompt512_out128 | 240 | 12 | 20s | 256 |
 | open_loop_rps14_prompt512_out128 | 280 | 14 | 20s | 256 |
 | open_loop_rps16_prompt512_out128 | 320 | 16 | 20s | 256 |
-| open_loop_rps18_prompt512_out128 | 360 | 18 | 20s | 256 |
-| open_loop_rps20_prompt512_out128 | 400 | 20 | 20s | 256 |
+| open_loop_rps18_0_prompt512_out128 | 360 | 18.0 | 20s | 256 |
+| open_loop_rps18_5_prompt512_out128 | 370 | 18.5 | 20s | 256 |
+| open_loop_rps19_0_prompt512_out128 | 380 | 19.0 | 20s | 256 |
+| open_loop_rps19_5_prompt512_out128 | 390 | 19.5 | 20s | 256 |
+| open_loop_rps20_0_prompt512_out128 | 400 | 20.0 | 20s | 256 |
 | open_loop_rps30_prompt512_out128 | 600 | 30 | 20s | 256 |
 
 Report target and achieved request start rates, completion throughput, scheduler delay, latency, and errors separately for the open-loop stages.
