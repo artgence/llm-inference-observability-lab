@@ -41,7 +41,7 @@ Link: `incidents/incident-01-traffic-burst.md`
 
 Link: `incidents/incident-02-long-prompt-storm.md`
 
-- Test shape: prompt-token target 15,360, output-token target 128, 2 RPS for 20 seconds, `MAX_MODEL_LEN=16384`
+- Test shape: prompt-token targets 2,048, 4,096, 8,192, 12,288, and 15,360; output-token target 128; 2 RPS for 20 seconds per stage; `MAX_MODEL_LEN=16384`
 - Symptom and impact: TBD
 - Prefill, queue, and KV evidence: TBD
 - Mitigation and alert: TBD

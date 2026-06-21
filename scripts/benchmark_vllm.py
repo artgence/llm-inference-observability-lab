@@ -920,6 +920,11 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
 def validate_workload(config: dict[str, Any]) -> None:
     if "runs" not in config or not isinstance(config["runs"], list) or not config["runs"]:
         raise ValueError("workload must contain a non-empty 'runs' list")
+    max_model_len = config.get("max_model_len")
+    if max_model_len is not None:
+        max_model_len = int(max_model_len)
+        if max_model_len < 1:
+            raise ValueError("max_model_len must be >= 1")
     names: set[str] = set()
     for index, run in enumerate(config["runs"]):
         for key in ("name", "request_count", "max_tokens"):
@@ -936,6 +941,14 @@ def validate_workload(config: dict[str, Any]) -> None:
             raise ValueError(f"run {run['name']} must have prompt_tokens >= 1")
         if "output_tokens_target" in run and int(run["output_tokens_target"]) < 1:
             raise ValueError(f"run {run['name']} must have output_tokens_target >= 1")
+        if max_model_len is not None and "prompt_tokens" in run:
+            target_context_tokens = int(run["prompt_tokens"]) + int(run["max_tokens"])
+            if target_context_tokens >= max_model_len:
+                raise ValueError(
+                    f"run {run['name']} targets {target_context_tokens} prompt plus "
+                    f"output tokens; this must be less than max_model_len "
+                    f"{max_model_len}"
+                )
         load_mode = run.get("load_mode", "closed_loop")
         if load_mode not in {"closed_loop", "open_loop"}:
             raise ValueError(f"run {run['name']} has unsupported load_mode '{load_mode}'")
@@ -966,6 +979,7 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
     plan = {
         "model": model,
         "base_url": base_url,
+        "max_model_len": config.get("max_model_len"),
         "runs": [
             {
                 "name": run["name"],
@@ -984,6 +998,18 @@ def dry_run(config: dict[str, Any], model: str, base_url: str) -> None:
                 "prompt_tokens": int(run["prompt_tokens"]) if "prompt_tokens" in run else None,
                 "prompt_words": int(run["prompt_words"]) if "prompt_words" in run else None,
                 "max_tokens": int(run["max_tokens"]),
+                "target_context_tokens": (
+                    int(run["prompt_tokens"]) + int(run["max_tokens"])
+                    if "prompt_tokens" in run
+                    else None
+                ),
+                "context_headroom_tokens": (
+                    int(config["max_model_len"])
+                    - int(run["prompt_tokens"])
+                    - int(run["max_tokens"])
+                    if "max_model_len" in config and "prompt_tokens" in run
+                    else None
+                ),
                 "output_tokens_target": (
                     int(run["output_tokens_target"])
                     if "output_tokens_target" in run
@@ -1049,6 +1075,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 "base_url": base_url.rstrip("/"),
                 "workload_file": str(Path(args.workload)),
                 "workload_description": config.get("description"),
+                "max_model_len": config.get("max_model_len"),
                 "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
                 "vllm_metrics_sampling_enabled": not getattr(
                     args, "disable_vllm_metrics_sampling", False

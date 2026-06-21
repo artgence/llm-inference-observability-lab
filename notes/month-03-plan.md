@@ -35,7 +35,7 @@ python3 scripts/benchmark_vllm.py \
 
 ## Incident 2: Long Prompt Storm
 
-Use the 16,384-token server limit for a 15,360-token prompt target and a 128-token output target. This leaves 896 tokens for the output and chat-template/token-estimation overhead. Restart or recreate the serving container first; do not run a second vLLM process while the existing PID 1 server still owns port 8000:
+Use an ascending prompt-target sweep of 2,048, 4,096, 8,192, 12,288, and 15,360 tokens with a fixed 128-token output target. Every stage stays below the 16,384-token server limit; the largest leaves 896 tokens for output and chat-template/token-estimation overhead. Restart or recreate the serving container first; do not run a second vLLM process while the existing PID 1 server still owns port 8000:
 
 ```bash
 MAX_MODEL_LEN=16384 scripts/start_vllm_server.sh
@@ -48,6 +48,8 @@ python3 scripts/benchmark_vllm.py \
   --workload workloads/month3_long_prompt_storm_incident.json \
   --metrics-export-port 9001
 ```
+
+The workload-level `max_model_len` guard rejects any stage whose prompt target plus output cap reaches or exceeds 16,384 tokens.
 
 ## Incident 3: Memory Pressure
 

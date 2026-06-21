@@ -2,7 +2,7 @@
 
 Status: awaiting GPU-backed run.
 
-Test shape: prompt-token target 15,360, output-token target 128, 2 RPS for 20 seconds, with `MAX_MODEL_LEN=16384`.
+Test shape: ascending prompt-token targets of 2,048, 4,096, 8,192, 12,288, and 15,360; output-token target 128; 2 RPS for 20 seconds per stage; `MAX_MODEL_LEN=16384`.
 
 Generate this note with:
 
