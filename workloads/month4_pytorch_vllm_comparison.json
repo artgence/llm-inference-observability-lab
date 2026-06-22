@@ -1,0 +1,153 @@
+{
+  "description": "Report 02.5 vLLM comparison matrix matching the PyTorch baseline prompt, output, and batch/concurrency shapes.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "report02_5_vllm_c1_p512_o128",
+      "analysis_group": "pytorch_vllm_p512",
+      "request_count": 10,
+      "concurrency": 1,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "report02_5_vllm_c2_p512_o128",
+      "analysis_group": "pytorch_vllm_p512",
+      "request_count": 20,
+      "concurrency": 2,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "report02_5_vllm_c4_p512_o128",
+      "analysis_group": "pytorch_vllm_p512",
+      "request_count": 40,
+      "concurrency": 4,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "report02_5_vllm_c8_p512_o128",
+      "analysis_group": "pytorch_vllm_p512",
+      "request_count": 80,
+      "concurrency": 8,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "report02_5_vllm_c1_p2048_o128",
+      "analysis_group": "pytorch_vllm_p2048",
+      "request_count": 10,
+      "concurrency": 1,
+      "prompt_tokens": 2048,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 420
+    },
+    {
+      "name": "report02_5_vllm_c2_p2048_o128",
+      "analysis_group": "pytorch_vllm_p2048",
+      "request_count": 20,
+      "concurrency": 2,
+      "prompt_tokens": 2048,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 420
+    },
+    {
+      "name": "report02_5_vllm_c4_p2048_o128",
+      "analysis_group": "pytorch_vllm_p2048",
+      "request_count": 40,
+      "concurrency": 4,
+      "prompt_tokens": 2048,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 420
+    },
+    {
+      "name": "report02_5_vllm_c8_p2048_o128",
+      "analysis_group": "pytorch_vllm_p2048",
+      "request_count": 80,
+      "concurrency": 8,
+      "prompt_tokens": 2048,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 420
+    },
+    {
+      "name": "report02_5_vllm_c1_p8192_o128",
+      "analysis_group": "pytorch_vllm_p8192",
+      "request_count": 10,
+      "concurrency": 1,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "report02_5_vllm_c2_p8192_o128",
+      "analysis_group": "pytorch_vllm_p8192",
+      "request_count": 20,
+      "concurrency": 2,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "report02_5_vllm_c4_p8192_o128",
+      "analysis_group": "pytorch_vllm_p8192",
+      "request_count": 40,
+      "concurrency": 4,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "report02_5_vllm_c8_p8192_o128",
+      "analysis_group": "pytorch_vllm_p8192",
+      "request_count": 80,
+      "concurrency": 8,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "response_instruction": "Write approximately 128 output tokens explaining the observed inference behavior. Continue until the requested length is reached.",
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    }
+  ]
+}
