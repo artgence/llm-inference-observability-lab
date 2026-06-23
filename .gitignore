@@ -1,6 +1,7 @@
 .DS_Store
 .env
 README.md
+!pytorch_baseline/README.md
 memory.md
 __pycache__/
 *.py[cod]

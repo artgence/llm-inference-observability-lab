@@ -149,7 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_REVISION)
-    parser.add_argument("--device", default="auto")
+    parser.add_argument("--device", default="cuda")
     parser.add_argument(
         "--dtype",
         choices=["auto", "fp16", "bf16", "fp32"],

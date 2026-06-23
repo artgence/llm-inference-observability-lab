@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +46,13 @@ def resolve_device(torch: Any, requested: str) -> str:
     if requested == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
     if requested.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError(f"device {requested!r} requested but CUDA is unavailable")
+        torch_cuda = getattr(getattr(torch, "version", None), "cuda", None)
+        raise RuntimeError(
+            f"device {requested!r} requested but CUDA is unavailable. "
+            f"This PyTorch build targets CUDA {torch_cuda or 'unknown'}; verify that the "
+            "host NVIDIA driver supports it, or install the PyTorch build selected for "
+            "the existing vLLM environment. Do not continue a GPU benchmark on CPU."
+        )
     return requested
 
 
@@ -132,6 +139,32 @@ def model_weight_bytes(model: Any) -> int:
     return total
 
 
+def normalize_token_ids(value: Any) -> list[int]:
+    """Normalize tokenizer output for one prompt across Transformers versions."""
+    if isinstance(value, Mapping):
+        if "input_ids" not in value:
+            raise ValueError("tokenizer result does not contain input_ids")
+        value = value["input_ids"]
+    elif hasattr(value, "input_ids"):
+        value = value.input_ids
+
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, tuple):
+        value = list(value)
+    if isinstance(value, list) and len(value) == 1 and isinstance(
+        value[0], (list, tuple)
+    ):
+        value = list(value[0])
+    if not isinstance(value, list):
+        raise TypeError(
+            f"unsupported tokenizer result type: {type(value).__name__}"
+        )
+    if any(isinstance(token_id, (list, tuple, Mapping)) for token_id in value):
+        raise ValueError("expected token IDs for exactly one prompt")
+    return [int(token_id) for token_id in value]
+
+
 def render_chat_ids(tokenizer: Any, content: str) -> list[int]:
     messages = [{"role": "user", "content": content}]
     if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
@@ -142,11 +175,7 @@ def render_chat_ids(tokenizer: Any, content: str) -> list[int]:
         )
     else:
         ids = tokenizer.encode(content, add_special_tokens=True)
-    if hasattr(ids, "tolist"):
-        ids = ids.tolist()
-    if ids and isinstance(ids[0], list):
-        ids = ids[0]
-    return [int(token_id) for token_id in ids]
+    return normalize_token_ids(ids)
 
 
 def exact_length_text(seed: str, target_chars: int) -> str:
@@ -198,6 +227,13 @@ def load_model_and_tokenizer(
 ) -> tuple[Any, Any, Any, str]:
     torch, AutoModelForCausalLM, AutoTokenizer = load_dependencies()
     device = resolve_device(torch, device_name)
+    if device == "cpu" and "fp8" in model_id.lower():
+        raise RuntimeError(
+            f"{model_id!r} is an FP8 checkpoint, but the requested device resolved to "
+            "CPU. Fix CUDA availability and rerun with --device cuda. Loading this "
+            "checkpoint on CPU may disable compressed execution and initialize missing "
+            "quantization parameters, which invalidates the benchmark."
+        )
     dtype = resolve_dtype(torch, dtype_name)
     token = os.environ.get("HF_TOKEN") or None
     tokenizer = AutoTokenizer.from_pretrained(
@@ -215,7 +251,7 @@ def load_model_and_tokenizer(
         "low_cpu_mem_usage": True,
     }
     if dtype != "auto":
-        model_kwargs["torch_dtype"] = dtype
+        model_kwargs["dtype"] = dtype
     model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
     try:
         model.to(device)

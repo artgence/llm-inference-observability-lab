@@ -1,3 +1,5 @@
-torch
+# Install the PyTorch build compatible with the host NVIDIA driver or reuse the
+# version pinned by the vLLM image. Do not upgrade torch implicitly here.
 transformers
 accelerate
+compressed-tensors
