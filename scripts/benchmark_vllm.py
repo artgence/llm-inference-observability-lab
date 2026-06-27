@@ -30,11 +30,19 @@ VLLM_METRICS = {
     "vllm:prompt_tokens_total",
     "vllm:generation_tokens_total",
     "vllm:request_success_total",
+    "vllm:prefix_cache_hits_total",
+    "vllm:prefix_cache_queries_total",
+    "vllm:prompt_tokens_cached_total",
+    "vllm:prompt_tokens_by_source_total",
+    # Compatibility with older vLLM metric names and saved benchmark samples.
     "vllm:prefix_cache_hits",
     "vllm:prefix_cache_queries",
     "vllm:prompt_tokens_cached",
     "vllm:num_preemptions",
 }
+VLLM_LOCAL_CACHE_HIT_TOKENS = (
+    'vllm:prompt_tokens_by_source_total{source="local_cache_hit"}'
+)
 
 SERVER_SETTING_ENV_KEYS = [
     "ENABLE_PREFIX_CACHING",
@@ -344,6 +352,10 @@ def parse_prometheus_metrics(text: str) -> dict[str, float]:
         metric_name = metric_with_labels.split("{", 1)[0]
         if metric_name not in VLLM_METRICS:
             continue
+        if metric_name == "vllm:prompt_tokens_by_source_total":
+            if 'source="local_cache_hit"' not in metric_with_labels:
+                continue
+            metric_name = VLLM_LOCAL_CACHE_HIT_TOKENS
         try:
             metrics[metric_name] += float(raw_value)
         except ValueError:
@@ -862,8 +874,26 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
             return 0.0
         return max(0.0, present[-1] - present[0])
 
-    prefix_hits = counter_delta("vllm:prefix_cache_hits")
-    prefix_queries = counter_delta("vllm:prefix_cache_queries")
+    def counter_delta_with_aliases(*metrics: str) -> float | None:
+        for metric in metrics:
+            value = counter_delta(metric)
+            if value is not None:
+                return value
+        return None
+
+    prefix_hits = counter_delta_with_aliases(
+        "vllm:prefix_cache_hits_total",
+        "vllm:prefix_cache_hits",
+    )
+    prefix_queries = counter_delta_with_aliases(
+        "vllm:prefix_cache_queries_total",
+        "vllm:prefix_cache_queries",
+    )
+    prompt_tokens_cached = counter_delta_with_aliases(
+        "vllm:prompt_tokens_cached_total",
+        VLLM_LOCAL_CACHE_HIT_TOKENS,
+        "vllm:prompt_tokens_cached",
+    )
 
     return {
         "vllm_requests_running_max": maximum("vllm:num_requests_running"),
@@ -876,7 +906,7 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
         ),
         "vllm_prefix_cache_hit_tokens": prefix_hits,
         "vllm_prefix_cache_query_tokens": prefix_queries,
-        "vllm_prompt_tokens_cached": counter_delta("vllm:prompt_tokens_cached"),
+        "vllm_prompt_tokens_cached": prompt_tokens_cached,
         "vllm_preemptions": counter_delta("vllm:num_preemptions"),
         "vllm_metrics_sample_errors": sample_errors,
     }
@@ -1503,6 +1533,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
                         ]
                     for future in as_completed(futures):
                         result = future.result()
+                        completed_request_index = int(result["request_index"])
                         result.update(
                             {
                                 "run_id": run_id,
@@ -1528,7 +1559,9 @@ def run_benchmark(args: argparse.Namespace) -> int:
                                 "max_in_flight": concurrency,
                                 "requested_max_tokens": int(workload["max_tokens"]),
                                 "prompt_tokens_target": (
-                                    prompt_token_target_for_request(workload, index)
+                                    prompt_token_target_for_request(
+                                        workload, completed_request_index
+                                    )
                                 ),
                                 "prefix_mode": workload.get("prefix_mode"),
                                 "prompt_words": (

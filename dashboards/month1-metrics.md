@@ -13,7 +13,9 @@ Useful vLLM metrics to inspect during baseline runs:
 - `vllm:request_success`
 - `vllm:prompt_tokens`
 - `vllm:generation_tokens`
-- `vllm:prefix_cache_hits`
-- `vllm:prefix_cache_queries`
+- `vllm:prefix_cache_hits_total`
+- `vllm:prefix_cache_queries_total`
+- `vllm:prompt_tokens_cached_total`
+- `vllm:prompt_tokens_by_source_total{source="local_cache_hit"}`
 
 For the first report, include raw benchmark metrics first. Prometheus/Grafana becomes the main workstream in Month 3.

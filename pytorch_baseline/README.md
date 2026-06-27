@@ -4,15 +4,26 @@ This module provides an in-process inference baseline for understanding why a se
 
 ## Environment
 
-Use the same GPU host and, when supported, the exact model revision used by the vLLM comparison.
-
-First verify that the PyTorch already installed in the vLLM environment can use the
-GPU. An unpinned `pip install torch` can replace it with a build that requires a
-newer NVIDIA driver.
+Use an isolated CUDA 12.8 environment so the PyTorch, torchvision, and torchaudio
+wheels remain compatible. From the repository root inside the GPU container:
 
 ```bash
-python3 -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())'
-python3 -m pip install -r pytorch_baseline/requirements.txt
+cd /workspace/llm-inference-observability-lab
+
+deactivate 2>/dev/null || true
+rm -rf .venv-cu128
+
+python3 -m venv .venv-cu128
+source .venv-cu128/bin/activate
+
+python -m pip install -U pip setuptools wheel
+
+python -m pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+
+python -m pip install transformers accelerate safetensors sentencepiece protobuf psutil pandas
+python -m pip install 'compressed-tensors>=0.15.0' --no-deps
+
 export HF_TOKEN=hf_your_token_here
 export PYTORCH_MODEL_ID=neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8
 export MODEL_REVISION=main
@@ -20,13 +31,17 @@ unset HF_HUB_ENABLE_HF_TRANSFER
 export HF_XET_HIGH_PERFORMANCE=1
 ```
 
-The CUDA check must end with `True`. If it is `False` and PyTorch reports that the
-driver is too old, either update the host driver or restore the CUDA-compatible
-PyTorch version required by the vLLM image. Do not use CPU fallback for the FP8
-checkpoint: compressed execution may be disabled and missing quantization state
-may be initialized, making correctness and performance results invalid.
+Verify the pinned environment before loading the model:
 
-The current vLLM checkpoint may require a specialized quantization integration when loaded through plain Transformers. If it cannot run, select one smaller Transformers-compatible checkpoint and use that exact repository/revision for both the PyTorch and vLLM comparison. Do not compare different models and attribute the result to the serving engine.
+```bash
+python -c 'import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.version.cuda, torch.cuda.is_available())'
+```
+
+The check must report torch `2.8.0`, torchvision `0.23.0`, CUDA `12.8`, and CUDA
+availability `True`. Do not use CPU fallback for the FP8 checkpoint: compressed
+execution may be disabled and missing quantization state may be initialized, making
+correctness and performance results invalid. Keep the exact model revision identical
+for the PyTorch and vLLM comparison.
 
 ## Validate Without Loading a Model
 
