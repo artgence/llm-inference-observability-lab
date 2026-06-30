@@ -13,12 +13,15 @@ from typing import Any
 
 DISPLAY_COLUMNS = [
     "server_config_label",
+    "server_config_verified",
     "workload",
     "analysis_group",
     "concurrency",
     "prompt_tokens_target",
     "prompt_tokens_target_min",
     "prompt_tokens_target_max",
+    "prompt_parity_delta_pct",
+    "prompt_parity_passed",
     "prefix_mode",
     "admission_control_action",
     "admission_rejected_count",
@@ -76,8 +79,21 @@ def load_run(run_dir: Path) -> list[dict[str, str]]:
         else {}
     )
     label = metadata.get("server_config_label") or run_dir.name
+    server_evidence = metadata.get("server_evidence") or {}
+    comparisons = server_evidence.get("config_comparisons") or []
+    config_verified = bool(comparisons) and all(
+        comparison.get("matched") for comparison in comparisons
+    )
     for row in rows:
         row["server_config_label"] = str(label)
+        row["server_config_verified"] = str(config_verified)
+        row["server_launch_command"] = str(
+            (server_evidence.get("launch") or {}).get("command") or "unavailable"
+        )
+        row["server_metrics_config"] = json.dumps(
+            server_evidence.get("metrics_config") or [],
+            sort_keys=True,
+        )
         row["run_id"] = str(metadata.get("run_id", run_dir.name))
         row["model"] = str(metadata.get("model", "unknown"))
     return rows
@@ -92,6 +108,37 @@ def render_table(rows: list[dict[str, str]]) -> list[str]:
     return lines
 
 
+def render_server_evidence(rows: list[dict[str, str]]) -> list[str]:
+    evidence: dict[str, dict[str, str]] = {}
+    for row in rows:
+        label = row["server_config_label"]
+        evidence.setdefault(
+            label,
+            {
+                "verified": row.get("server_config_verified", "False"),
+                "launch_command": row.get("server_launch_command", "unavailable"),
+                "metrics_config": row.get("server_metrics_config", "[]"),
+            },
+        )
+    lines = [
+        "| server_config_label | verified | launch_command | metrics_config |",
+        "| --- | --- | --- | --- |",
+    ]
+    for label, values in evidence.items():
+        cells = [
+            label,
+            values["verified"],
+            f"`{values['launch_command']}`",
+            f"`{values['metrics_config']}`",
+        ]
+        lines.append(
+            "| "
+            + " | ".join(cell.replace("|", "\\|") for cell in cells)
+            + " |"
+        )
+    return lines
+
+
 def prefix_findings(rows: list[dict[str, str]]) -> list[str]:
     by_variant: dict[str, dict[str, dict[str, str]]] = defaultdict(dict)
     for row in rows:
@@ -103,6 +150,16 @@ def prefix_findings(rows: list[dict[str, str]]) -> list[str]:
             continue
         shared = modes["shared"]
         unique = modes["unique"]
+        parity_passed = (
+            str(shared.get("prompt_parity_passed", "")).lower() == "true"
+            and str(unique.get("prompt_parity_passed", "")).lower() == "true"
+        )
+        if not parity_passed:
+            findings.append(
+                f"- **{variant}:** prefix-cache comparison rejected because "
+                "prompt-token parity did not pass its configured tolerance."
+            )
+            continue
         findings.append(
             f"- **{variant}:** shared versus unique prefix TTFT p95: "
             f"{ratio_text(shared.get('ttft_p95_s'), unique.get('ttft_p95_s'), True)}; "
@@ -121,8 +178,16 @@ def cross_variant_findings(rows: list[dict[str, str]]) -> list[str]:
     for workload, workload_rows in sorted(by_workload.items()):
         if len(workload_rows) < 2:
             continue
-        baseline = workload_rows[0]
-        for candidate in workload_rows[1:]:
+        for baseline, candidate in zip(workload_rows, workload_rows[1:]):
+            if not (
+                str(baseline.get("server_config_verified", "")).lower() == "true"
+                and str(candidate.get("server_config_verified", "")).lower() == "true"
+            ):
+                findings.append(
+                    f"- **{workload}: comparison rejected:** actual server "
+                    "configuration was not verified for both variants."
+                )
+                continue
             findings.append(
                 f"- **{workload}: {candidate['server_config_label']} vs "
                 f"{baseline['server_config_label']}:** TTFT p95 "
@@ -146,6 +211,10 @@ def build_report(rows: list[dict[str, str]]) -> str:
         "",
         *findings,
         "",
+        "## Server Evidence",
+        "",
+        *render_server_evidence(rows),
+        "",
         "## Results",
         "",
         *render_table(rows),
@@ -153,6 +222,8 @@ def build_report(rows: list[dict[str, str]]) -> str:
         "## Interpretation",
         "",
         "- Prefix caching should primarily improve prefill/TTFT for repeated prefixes; it should not materially improve decode-heavy TPOT.",
+        "- Server labels are descriptive only; interpret a variant only when metadata includes its launch command, `/metrics` config, and passed config expectations.",
+        "- Reject shared-versus-unique prefix conclusions when the prompt-token parity check fails.",
         "- Treat high scheduler delay as a client-capacity problem before attributing latency to vLLM.",
         "- Admission rejections are intentional policy outcomes and must be separated from server failures and OOMs.",
         "- A serving knob is useful only if its latency or throughput benefit does not create unacceptable errors, KV-cache pressure, or cost.",
@@ -163,7 +234,14 @@ def build_report(rows: list[dict[str, str]]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("run_dirs", nargs="+", help="Benchmark run directories, baseline first")
+    parser.add_argument(
+        "run_dirs",
+        nargs="+",
+        help=(
+            "Benchmark run directories in controlled comparison order; adjacent "
+            "variants are compared"
+        ),
+    )
     parser.add_argument(
         "--out",
         default="reports/report-04-results.md",

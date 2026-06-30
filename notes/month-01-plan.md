@@ -6,7 +6,7 @@ Goal: build a clean, reproducible baseline loop before adding complex serving kn
 
 - [x] Create project structure.
 - [x] Preserve the six-month roadmap in `memory.md`.
-- [x] Add vLLM server start command.
+- [x] Document the Runpod container startup command.
 - [x] Add OpenAI-compatible smoke test.
 - [x] Add benchmark script with streaming TTFT capture.
 - [x] Add GPU metrics sampler.
@@ -19,10 +19,14 @@ Goal: build a clean, reproducible baseline loop before adding complex serving kn
 
 ## Baseline Run Flow
 
-Start the server:
+Set the Runpod container command before creating the pod. vLLM is the container's
+main process, so changing this command requires a new pod rather than starting a
+second server inside the running container:
 
 ```bash
-MODEL_ID=neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 scripts/start_vllm_server.sh
+vllm serve neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 \
+  --max-model-len 16384 \
+  --port 8000
 ```
 
 Smoke test:
@@ -40,7 +44,9 @@ python3 scripts/benchmark_vllm.py --workload workloads/month1_baseline.json --dr
 Run the benchmark:
 
 ```bash
-python3 scripts/benchmark_vllm.py --workload workloads/month1_baseline.json
+python3 scripts/benchmark_vllm.py \
+  --workload workloads/month1_baseline.json \
+  --expect-server-config max_model_len=16384
 ```
 
 Run the open-loop arrival-rate sweep:

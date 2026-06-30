@@ -17,5 +17,7 @@ Useful vLLM metrics to inspect during baseline runs:
 - `vllm:prefix_cache_queries_total`
 - `vllm:prompt_tokens_cached_total`
 - `vllm:prompt_tokens_by_source_total{source="local_cache_hit"}`
+- `vllm:request_prefill_time_seconds_count` (use workload before/after deltas)
+- `vllm:cache_config_info` (capture labels as server configuration evidence)
 
 For the first report, include raw benchmark metrics first. Prometheus/Grafana becomes the main workstream in Month 3.

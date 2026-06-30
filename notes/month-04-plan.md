@@ -14,16 +14,16 @@ Goal: understand the Hugging Face/PyTorch inference path and CUDA memory behavio
 - [x] Add the matching vLLM p512/p2048/p8192 and c1/c2/c4/c8 workload matrix.
 - [x] Add the Report 02.5 template and comparison-table generator.
 - [ ] Complete Report 02.5 with a same-model PyTorch-versus-vLLM comparison.
-- [x] Add explicit launcher controls for prefix caching, chunked prefill, batching limits, KV-cache dtype, GPU-memory utilization, CPU offload, and quantization.
+- [x] Record the actual PID 1 vLLM command and `/metrics` configuration; treat benchmark labels as descriptive only.
 - [x] Add repeated-versus-unique prefix generation with equal prompt lengths.
 - [x] Add continuous-batching, context-capacity, admission-control, and quantized-70B workloads.
 - [x] Add workload-level mixed prompt lengths and reject/truncate admission policies.
-- [x] Add server-configuration labels and a Month 4 comparison report generator.
+- [x] Add descriptive server labels, actual configuration verification, drain/counter windows, and a Month 4 comparison report generator.
 - [ ] Define a small task-quality evaluation set before claiming an 8B/70B quality tradeoff.
 - [ ] Execute each server variant on the GPU host.
 - [ ] Complete Report 04 with measured boundaries and selected production defaults.
 
-Do not launch a second vLLM process while the existing PID 1 server owns port 8000. Restart or recreate the serving container between server-side variants. Use the same model, workload, GPU cost, and benchmark options for both sides of each comparison.
+Do not launch a second vLLM process while the existing PID 1 server owns port 8000. Set the required vLLM command when creating the Runpod pod and recreate the pod between server-side variants. The benchmark records `/proc` command-line evidence and `/metrics` config labels; `--server-config-label` never changes the server.
 
 ## Foundation Track: Hugging Face/PyTorch Baseline
 
@@ -136,59 +136,141 @@ Deliver `Report 02.5: PyTorch Baseline vs vLLM Serving - Latency, Memory, and Pr
 
 Do not spend this track training CNNs, implementing backpropagation, or studying JAX deeply. Do not claim “PyTorch expert.” Credible scope descriptions are “PyTorch inference/profiling,” “PyTorch CUDA memory analysis,” “Hugging Face/PyTorch serving baselines,” and “PyTorch Profiler for inference performance analysis.”
 
-## Experiment 1: Prefix Caching
+## Controlled Server Matrix
 
-The workload compares a request-unique 1,536-token prefix with a shared 1,536-token prefix inside equal 2,048-token prompts. Run it once with automatic prefix caching explicitly disabled and once enabled.
+Use three Runpod startup commands. Keep model, hardware, `MAX_MODEL_LEN`, and
+`MAX_NUM_BATCHED_TOKENS` identical:
+
+Every benchmark waits for two consecutive `/metrics` samples with zero running and
+waiting requests before and after each workload. Cumulative metrics use the explicit
+`before_workload` and `after_workload` samples, not arbitrary background samples.
+
+### Run A: Prefix Cache Off, Chunked Prefill Off
 
 ```bash
-ENABLE_PREFIX_CACHING=false scripts/start_vllm_server.sh
-python3 scripts/benchmark_vllm.py \
-  --workload workloads/month4_prefix_cache.json \
-  --server-config-label prefix_cache_off
-
-ENABLE_PREFIX_CACHING=true scripts/start_vllm_server.sh
-python3 scripts/benchmark_vllm.py \
-  --workload workloads/month4_prefix_cache.json \
-  --server-config-label prefix_cache_on
+vllm serve neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 \
+  --max-model-len 16384 \
+  --max-num-batched-tokens 8192 \
+  --no-enable-prefix-caching \
+  --no-enable-chunked-prefill \
+  --port 8000
 ```
 
-Compare TTFT and `vllm_prefix_cache_hit_rate` first. Automatic prefix caching reuses prefill KV blocks; it should not be presented as a decode/TPOT optimization.
+### Run B: Prefix Cache Off, Chunked Prefill On
+
+```bash
+vllm serve neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 \
+  --max-model-len 16384 \
+  --max-num-batched-tokens 8192 \
+  --max-num-partial-prefills 2 \
+  --max-long-partial-prefills 1 \
+  --long-prefill-token-threshold 4096 \
+  --no-enable-prefix-caching \
+  --enable-chunked-prefill \
+  --port 8000
+```
+
+### Run C: Prefix Cache On, Chunked Prefill On
+
+```bash
+vllm serve neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 \
+  --max-model-len 16384 \
+  --max-num-batched-tokens 8192 \
+  --max-num-partial-prefills 2 \
+  --max-long-partial-prefills 1 \
+  --long-prefill-token-threshold 4096 \
+  --enable-prefix-caching \
+  --enable-chunked-prefill \
+  --port 8000
+```
+
+## Experiment 1: Prefix Caching
+
+The workload compares a deterministically randomized request-unique prefix with a
+shared prefix built from the same word multiset. It enforces a maximum 2% difference
+in observed average prompt tokens. Run it on B and C so prefix caching is the only
+changed server variable:
+
+```bash
+python3 scripts/benchmark_vllm.py \
+  --workload workloads/month4_prefix_cache.json \
+  --server-config-label B_prefix_off_chunked_on \
+  --expect-server-config enable_prefix_caching=false \
+  --expect-server-config enable_chunked_prefill=true
+
+python3 scripts/benchmark_vllm.py \
+  --workload workloads/month4_prefix_cache.json \
+  --server-config-label C_prefix_on_chunked_on \
+  --expect-server-config enable_prefix_caching=true \
+  --expect-server-config enable_chunked_prefill=true
+```
+
+Compare TTFT and `vllm_prefix_cache_hit_rate` only when prompt parity passes.
+Automatic prefix caching reuses prefill KV blocks; it should not be presented as a
+decode/TPOT optimization.
 
 ## Experiment 2: Chunked Prefill and Long Context
 
-Run the same 2K, 8K, and 15,360-token prompt sweep with chunked prefill disabled and enabled. Keep `MAX_NUM_BATCHED_TOKENS` fixed so the comparison is attributable.
+Run the same context workload on A, B, and C. A versus B isolates chunked prefill.
+B versus C isolates prefix caching while chunked prefill remains enabled. Do not
+attribute A-versus-C differences to either knob alone.
+
+Use the matching label and expectations for each pod. Run A:
 
 ```bash
-ENABLE_CHUNKED_PREFILL=false MAX_NUM_BATCHED_TOKENS=8192 scripts/start_vllm_server.sh
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month4_context_capacity.json \
-  --server-config-label chunked_prefill_off
+  --server-config-label A_prefix_off_chunked_off \
+  --expect-server-config enable_prefix_caching=false \
+  --expect-server-config enable_chunked_prefill=false \
+  --expect-server-config max_num_batched_tokens=8192
+```
 
-ENABLE_CHUNKED_PREFILL=true \
-MAX_NUM_BATCHED_TOKENS=8192 \
-MAX_NUM_PARTIAL_PREFILLS=2 \
-MAX_LONG_PARTIAL_PREFILLS=1 \
-LONG_PREFILL_TOKEN_THRESHOLD=4096 \
-scripts/start_vllm_server.sh
+Run B:
+
+```bash
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month4_context_capacity.json \
-  --server-config-label chunked_prefill_on
+  --server-config-label B_prefix_off_chunked_on \
+  --expect-server-config enable_prefix_caching=false \
+  --expect-server-config enable_chunked_prefill=true \
+  --expect-server-config max_num_batched_tokens=8192
+```
+
+Run C:
+
+```bash
+python3 scripts/benchmark_vllm.py \
+  --workload workloads/month4_context_capacity.json \
+  --server-config-label C_prefix_on_chunked_on \
+  --expect-server-config enable_prefix_caching=true \
+  --expect-server-config enable_chunked_prefill=true \
+  --expect-server-config max_num_batched_tokens=8192
 ```
 
 ## Experiment 3: Continuous Batching and Capacity
 
 Run the same concurrency sweep with explicit sequence limits. Compare where throughput flattens and TTFT, queue depth, or KV-cache pressure accelerates.
 
-```bash
-MAX_NUM_SEQS=32 GPU_MEMORY_UTILIZATION=0.90 scripts/start_vllm_server.sh
-python3 scripts/benchmark_vllm.py \
-  --workload workloads/month4_batching_capacity.json \
-  --server-config-label max_seqs_32
+Set `--max-num-seqs 32 --gpu-memory-utilization 0.90` in one pod's startup
+command, then run:
 
-MAX_NUM_SEQS=64 GPU_MEMORY_UTILIZATION=0.90 scripts/start_vllm_server.sh
+```bash
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month4_batching_capacity.json \
-  --server-config-label max_seqs_64
+  --server-config-label max_seqs_32 \
+  --expect-server-config max_num_seqs=32 \
+  --expect-server-config gpu_memory_utilization=0.90
+```
+
+Recreate the pod with `--max-num-seqs 64` and run:
+
+```bash
+python3 scripts/benchmark_vllm.py \
+  --workload workloads/month4_batching_capacity.json \
+  --server-config-label max_seqs_64 \
+  --expect-server-config max_num_seqs=64 \
+  --expect-server-config gpu_memory_utilization=0.90
 ```
 
 ## Experiment 4: Admission Control
@@ -207,28 +289,37 @@ python3 scripts/benchmark_vllm.py \
 
 The FP8 70B checkpoint is approximately half the BF16 weight footprint but still does not fit in one 46 GB L40S. Use at least two L40S GPUs and tensor parallelism; skip this experiment when only one GPU is available.
 
-```bash
-MODEL_ID=neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8 \
-TENSOR_PARALLEL_SIZE=2 \
-MAX_MODEL_LEN=16384 \
-scripts/start_vllm_server.sh
+Use this Runpod startup command:
 
-MODEL_ID=neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8 \
+```bash
+vllm serve neuralmagic/Meta-Llama-3.1-70B-Instruct-FP8 \
+  --tensor-parallel-size 2 \
+  --max-model-len 16384 \
+  --port 8000
+```
+
+Then run:
+
+```bash
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month4_quantized_70b.json \
-  --server-config-label llama31_70b_fp8_tp2
+  --server-config-label llama31_70b_fp8_tp2 \
+  --expect-server-config tensor_parallel_size=2 \
+  --expect-server-config max_model_len=16384
 ```
 
 ## Build Report 04
 
-Supply baseline variants before candidate variants so percentage comparisons use the intended reference.
+Supply variants in controlled order. The analyzer compares adjacent configurations:
+B-to-C for prefix caching and A-to-B then B-to-C for context capacity.
 
 ```bash
 python3 scripts/analyze_month4.py \
-  benchmarks/PREFIX_OFF_RUN \
-  benchmarks/PREFIX_ON_RUN \
-  benchmarks/CHUNKED_OFF_RUN \
-  benchmarks/CHUNKED_ON_RUN \
+  benchmarks/B_PREFIX_OFF_CHUNKED_ON_RUN \
+  benchmarks/C_PREFIX_ON_CHUNKED_ON_RUN \
+  benchmarks/A_CONTEXT_PREFIX_OFF_CHUNKED_OFF_RUN \
+  benchmarks/B_CONTEXT_PREFIX_OFF_CHUNKED_ON_RUN \
+  benchmarks/C_CONTEXT_PREFIX_ON_CHUNKED_ON_RUN \
   benchmarks/MAX_SEQS_32_RUN \
   benchmarks/MAX_SEQS_64_RUN \
   benchmarks/ADMISSION_RUN \
@@ -242,8 +333,14 @@ python3 scripts/analyze_month4.py \
 - Profiler overhead is excluded from ordinary latency/throughput results and reported separately.
 - Memory conclusions distinguish PyTorch allocated/reserved memory from total device/process memory.
 - Report 02.5 explains prefill/decode behavior and why serving-engine KV/batching controls exist without claiming kernel-level expertise.
-- All server variants record a distinct `server_config_label` in `metadata.json`.
-- Prefix prompts have the same total target and differ only in prefix reuse.
+- All server variants record the discovered vLLM launch command, `/metrics`
+  configuration, expected values, and comparison results in `metadata.json`; labels
+  alone are never treated as configuration evidence.
+- A versus B changes only chunked prefill; B versus C changes only prefix caching.
+- Every workload has successful before/after drain guards and cumulative counters
+  use explicit boundary deltas.
+- Prefix prompts use identical word multisets, randomize the beginning of unique
+  prefixes, and pass the configured observed-token parity threshold.
 - Prefix-cache claims include non-zero cache query/hit evidence from vLLM metrics.
 - Scheduler-delay p95 remains low enough that the client is not the bottleneck.
 - Context targets plus output caps remain below `MAX_MODEL_LEN=16384`.

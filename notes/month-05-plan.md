@@ -30,7 +30,7 @@ This is not a “multi-GPU works” demonstration. Every run must identify a fit
 
 ## Implementation Checklist
 
-- [ ] Extend the launcher with `PIPELINE_PARALLEL_SIZE`, `DISTRIBUTED_EXECUTOR_BACKEND`, and `SPECULATIVE_CONFIG`.
+- [ ] Extend server-evidence capture for pipeline-parallel size, distributed executor backend, and speculative config; set these in the Runpod startup command rather than launching a second server.
 - [ ] Record topology metadata: GPU count, TP/PP/DP sizes, visible devices, interconnect description, model revision, and server command.
 - [ ] Add a topology matrix runner with warmup plus three measured repetitions per configuration.
 - [ ] Capture/parse startup logs for model-fit failure, initialization time, KV-cache token capacity, and maximum-concurrency estimates.

@@ -23,10 +23,14 @@ This report captures the first reproducible baseline for vLLM serving using neur
 ## Server Command
 
 ```bash
-MODEL_ID=neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 scripts/start_vllm_server.sh
+vllm serve neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8 \
+  --max-model-len 16384 \
+  --port 8000
 ```
 
-Record the exact expanded command and any deviations here. For full native Llama 3.1 context, note `MAX_MODEL_LEN` and `TENSOR_PARALLEL_SIZE`.
+Use this as the Runpod container startup command. Copy the command discovered in
+benchmark `metadata.json` here, together with the captured
+`vllm:cache_config_info` labels and any deviations.
 
 ## Workload
 

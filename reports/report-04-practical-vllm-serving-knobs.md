@@ -16,17 +16,26 @@ This report evaluates prefix caching, chunked prefill, continuous batching limit
 | vLLM version | TBD |
 | CUDA/driver | TBD |
 | Effective GPU hourly cost | TBD |
+| Actual vLLM launch command | TBD from `metadata.json` |
+| `/metrics` cache config | TBD from `vllm:cache_config_info` |
+| Config expectations verified | TBD |
+
+The server configuration label is descriptive only. Do not interpret a comparison
+unless the actual command/config evidence was captured and all expected values matched.
 
 ## Prefix Caching
 
 - Shared-prefix TTFT effect: TBD
 - Shared-prefix throughput effect: TBD
 - Prefix-cache hit/query tokens and hit rate: TBD
+- Prompt-token parity delta and pass/fail: TBD
 - Decode/TPOT effect: TBD
 - Cache/KV tradeoff: TBD
 
 ## Chunked Prefill and Context Capacity
 
+- A (prefix off, chunked off) versus B (prefix off, chunked on): TBD
+- B (prefix off, chunked on) versus C (prefix on, chunked on): TBD
 - Short-request TTFT during long prefills: TBD
 - Long-prompt completion throughput: TBD
 - Queue/KV boundary: TBD
@@ -64,3 +73,4 @@ TBD
 - Capacity boundary: TBD
 - Cost/latency tradeoff: TBD
 - Production guardrail: TBD
+- Drain guards and before/after counter windows valid: TBD
