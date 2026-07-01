@@ -1,0 +1,37 @@
+{
+  "description": "Month 5 baseline versus n-gram speculative decoding at low and moderate request rates.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:8000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "m5_spec_p512_o256_rps2",
+      "analysis_group": "spec_decode_low_rate",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 2,
+      "request_count": 40,
+      "max_in_flight": 32,
+      "prompt_tokens": 512,
+      "max_tokens": 256,
+      "output_tokens_target": 256,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m5_spec_p512_o256_rps12",
+      "analysis_group": "spec_decode_moderate_rate",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 12,
+      "request_count": 120,
+      "max_in_flight": 96,
+      "prompt_tokens": 512,
+      "max_tokens": 256,
+      "output_tokens_target": 256,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    }
+  ]
+}

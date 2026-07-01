@@ -1,0 +1,63 @@
+{
+  "description": "Month 5 replica-router policy, burst, and failure behavior.",
+  "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
+  "base_url": "http://localhost:9000",
+  "api_key": "EMPTY",
+  "max_model_len": 16384,
+  "runs": [
+    {
+      "name": "m5_arch_p512_o128_rps18",
+      "analysis_group": "topology_fixed_rate",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 18,
+      "request_count": 180,
+      "max_in_flight": 128,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m5_arch_c32_p512_o128",
+      "analysis_group": "topology_concurrency",
+      "request_count": 320,
+      "concurrency": 32,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    },
+    {
+      "name": "m5_arch_p8192_o128_rps2",
+      "analysis_group": "topology_long_context",
+      "load_mode": "open_loop",
+      "arrival_pattern": "steady",
+      "arrival_rate_rps": 2,
+      "request_count": 40,
+      "max_in_flight": 64,
+      "prompt_tokens": 8192,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 600
+    },
+    {
+      "name": "m5_router_burst30_p512_o128",
+      "analysis_group": "router_burst",
+      "load_mode": "open_loop",
+      "arrival_pattern": "bursty",
+      "arrival_rate_rps": 30,
+      "burst_size": 10,
+      "request_count": 180,
+      "max_in_flight": 128,
+      "prompt_tokens": 512,
+      "max_tokens": 128,
+      "output_tokens_target": 128,
+      "temperature": 0.0,
+      "timeout_seconds": 300
+    }
+  ]
+}

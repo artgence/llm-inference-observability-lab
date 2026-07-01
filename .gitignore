@@ -2,6 +2,7 @@
 .env
 README.md
 !pytorch_baseline/README.md
+!routing/README.md
 memory.md
 __pycache__/
 *.py[cod]

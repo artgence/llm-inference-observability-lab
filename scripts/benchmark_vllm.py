@@ -38,13 +38,34 @@ VLLM_METRICS = {
     "vllm:prompt_tokens_cached_total",
     "vllm:prompt_tokens_by_source_total",
     "vllm:request_prefill_time_seconds_count",
+    "vllm:spec_decode_num_drafts_total",
+    "vllm:spec_decode_num_draft_tokens_total",
+    "vllm:spec_decode_num_accepted_tokens_total",
+    "vllm:spec_decode_num_emitted_tokens_total",
     "vllm_requests_running",
     "vllm_requests_waiting",
+    "llm_router_requests_total",
+    "llm_router_retries_total",
+    "llm_router_no_healthy_worker_total",
+    "llm_router_worker_inflight",
+    "llm_router_worker_attempts_total",
+    "llm_router_worker_successes_total",
+    "llm_router_worker_failures_total",
+    "llm_router_worker_circuit_open",
+    "llm_router_worker_ewma_latency_seconds",
     # Compatibility with older vLLM metric names and saved benchmark samples.
     "vllm:prefix_cache_hits",
     "vllm:prefix_cache_queries",
     "vllm:prompt_tokens_cached",
     "vllm:num_preemptions",
+}
+ROUTER_WORKER_METRICS = {
+    "llm_router_worker_inflight",
+    "llm_router_worker_attempts_total",
+    "llm_router_worker_successes_total",
+    "llm_router_worker_failures_total",
+    "llm_router_worker_circuit_open",
+    "llm_router_worker_ewma_latency_seconds",
 }
 VLLM_LOCAL_CACHE_HIT_TOKENS = (
     'vllm:prompt_tokens_by_source_total{source="local_cache_hit"}'
@@ -71,7 +92,20 @@ SERVER_SETTING_ENV_KEYS = [
     "KV_CACHE_DTYPE",
     "QUANTIZATION",
     "TENSOR_PARALLEL_SIZE",
+    "PIPELINE_PARALLEL_SIZE",
+    "DATA_PARALLEL_SIZE",
+    "DISTRIBUTED_EXECUTOR_BACKEND",
+    "SPECULATIVE_CONFIG",
     "CPU_OFFLOAD_GB",
+]
+NCCL_ENV_KEYS = [
+    "NCCL_DEBUG",
+    "NCCL_DEBUG_SUBSYS",
+    "NCCL_P2P_DISABLE",
+    "NCCL_IB_DISABLE",
+    "NCCL_SOCKET_IFNAME",
+    "NCCL_ALGO",
+    "NCCL_PROTO",
 ]
 
 
@@ -384,8 +418,11 @@ def redact_command_argv(argv: list[str]) -> list[str]:
 
 def is_vllm_server_argv(argv: list[str]) -> bool:
     joined = " ".join(argv).lower()
-    return "vllm" in joined and (
-        " serve" in f" {joined}" or "api_server" in joined
+    return (
+        "vllm" in joined
+        and (" serve" in f" {joined}" or "api_server" in joined)
+    ) or (
+        "routing/router.py" in joined
     )
 
 
@@ -422,7 +459,7 @@ def discover_vllm_launch_command(override: str | None = None) -> dict[str, Any]:
             "pid": None,
             "argv": None,
             "command": None,
-            "error": "No readable vLLM serve process was found under /proc.",
+            "error": "No readable vLLM or replica-router process was found under /proc.",
         }
     pid, raw_argv = min(candidates, key=lambda item: (item[0] != 1, item[0]))
     argv = redact_command_argv(raw_argv)
@@ -547,6 +584,75 @@ def capture_server_evidence(
     return evidence
 
 
+def capture_gpu_topology() -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "captured_at": utc_now(),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "nccl_environment": {
+            key: os.environ[key] for key in NCCL_ENV_KEYS if key in os.environ
+        },
+        "gpus": [],
+        "topology_matrix": None,
+    }
+    if shutil.which("nvidia-smi") is None:
+        evidence["error"] = "nvidia-smi was not found"
+        evidence["gpu_count"] = None
+        return evidence
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,uuid,memory.total,driver_version,pci.bus_id",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            parts = [part.strip() for part in line.split(",")]
+            if len(parts) < 6:
+                continue
+            evidence["gpus"].append(
+                {
+                    "index": int(parts[0]),
+                    "name": parts[1],
+                    "uuid": parts[2],
+                    "memory_total_mb": safe_float(parts[3]),
+                    "driver_version": parts[4],
+                    "pci_bus_id": parts[5],
+                }
+            )
+    except Exception as exc:  # noqa: BLE001 - retain partial topology evidence.
+        evidence["query_error"] = str(exc)[:500]
+    try:
+        topology = subprocess.run(
+            ["nvidia-smi", "topo", "-m"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        evidence["topology_matrix"] = topology.stdout.strip()
+    except Exception as exc:  # noqa: BLE001 - topology support varies by image.
+        evidence["topology_error"] = str(exc)[:500]
+    evidence["gpu_count"] = len(evidence["gpus"]) or None
+    return evidence
+
+
+def parallelism_evidence(launch_config: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "tensor_parallel_size": launch_config.get("tensor_parallel_size", 1),
+        "pipeline_parallel_size": launch_config.get("pipeline_parallel_size", 1),
+        "data_parallel_size": launch_config.get("data_parallel_size", 1),
+        "distributed_executor_backend": launch_config.get(
+            "distributed_executor_backend"
+        ),
+        "speculative_config": launch_config.get("speculative_config"),
+    }
+
+
 def wait_for_server_drain(
     metrics_url: str,
     timeout_s: float,
@@ -599,6 +705,19 @@ def wait_for_server_drain(
 
 def classify_error(message: str, status_code: int | None = None) -> str:
     text = message.lower()
+    if "nccl" in text:
+        return "nccl_error"
+    if any(
+        marker in text
+        for marker in (
+            "rank mismatch",
+            "worker died",
+            "worker exited",
+            "distributed initialization",
+            "init_process_group",
+        )
+    ):
+        return "distributed_worker_error"
     if status_code == 429 or "rejected" in text or "rate limit" in text:
         return "rejected"
     if "out of memory" in text or "cuda oom" in text or "cuda error" in text:
@@ -710,6 +829,11 @@ def parse_prometheus_metrics(text: str) -> dict[str, float]:
             if 'source="local_cache_hit"' not in metric_with_labels:
                 continue
             metric_name = VLLM_LOCAL_CACHE_HIT_TOKENS
+        elif metric_name in ROUTER_WORKER_METRICS:
+            worker = parse_prometheus_labels(metric_with_labels).get("worker")
+            if not worker:
+                continue
+            metric_name = f'{metric_name}{{worker="{worker}"}}'
         try:
             metrics[metric_name] += float(raw_value)
         except ValueError:
@@ -1148,16 +1272,23 @@ def post_streaming_chat(
     }
 
 
-def load_gpu_summary(gpu_path: Path, workload_name: str | None = None) -> dict[str, float | None]:
+def load_gpu_summary(
+    gpu_path: Path, workload_name: str | None = None
+) -> dict[str, float | int | None]:
     if not gpu_path.exists():
         return {
+            "gpu_count_observed": None,
             "gpu_memory_used_mb_max": None,
             "gpu_memory_utilization_pct_max": None,
             "gpu_utilization_pct_avg": None,
+            "gpu_memory_used_imbalance_mb": None,
+            "gpu_utilization_imbalance_pct": None,
         }
     memory_values: list[float] = []
     memory_utilization_values: list[float] = []
     util_values: list[float] = []
+    per_gpu_memory: dict[str, list[float]] = defaultdict(list)
+    per_gpu_utilization: dict[str, list[float]] = defaultdict(list)
     with gpu_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
@@ -1167,18 +1298,41 @@ def load_gpu_summary(gpu_path: Path, workload_name: str | None = None) -> dict[s
             memory = safe_float(row.get("memory_used_mb"))
             memory_total = safe_float(row.get("memory_total_mb"))
             util = safe_float(row.get("gpu_utilization_pct"))
+            gpu_index = str(row.get("gpu_index") or "unknown")
             if memory is not None:
                 memory_values.append(memory)
+                per_gpu_memory[gpu_index].append(memory)
                 if memory_total is not None and memory_total > 0:
                     memory_utilization_values.append(memory / memory_total)
             if util is not None:
                 util_values.append(util)
+                per_gpu_utilization[gpu_index].append(util)
+    memory_max_by_gpu = [
+        max(values) for values in per_gpu_memory.values() if values
+    ]
+    utilization_avg_by_gpu = [
+        sum(values) / len(values)
+        for values in per_gpu_utilization.values()
+        if values
+    ]
+    observed_gpus = set(per_gpu_memory) | set(per_gpu_utilization)
     return {
+        "gpu_count_observed": len(observed_gpus) if observed_gpus else None,
         "gpu_memory_used_mb_max": max(memory_values) if memory_values else None,
         "gpu_memory_utilization_pct_max": (
             max(memory_utilization_values) * 100 if memory_utilization_values else None
         ),
         "gpu_utilization_pct_avg": sum(util_values) / len(util_values) if util_values else None,
+        "gpu_memory_used_imbalance_mb": (
+            max(memory_max_by_gpu) - min(memory_max_by_gpu)
+            if len(memory_max_by_gpu) >= 2
+            else 0.0 if len(memory_max_by_gpu) == 1 else None
+        ),
+        "gpu_utilization_imbalance_pct": (
+            max(utilization_avg_by_gpu) - min(utilization_avg_by_gpu)
+            if len(utilization_avg_by_gpu) >= 2
+            else 0.0 if len(utilization_avg_by_gpu) == 1 else None
+        ),
     }
 
 
@@ -1193,6 +1347,15 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
             "vllm_prefix_cache_query_tokens": None,
             "vllm_prompt_tokens_cached": None,
             "vllm_request_prefill_count": None,
+            "vllm_spec_decode_draft_tokens": None,
+            "vllm_spec_decode_accepted_tokens": None,
+            "vllm_spec_decode_emitted_tokens": None,
+            "vllm_spec_decode_acceptance_rate": None,
+            "router_retries": None,
+            "router_failures": None,
+            "router_no_healthy_worker": None,
+            "router_worker_attempt_imbalance_pct": None,
+            "router_circuit_open_workers_max": None,
             "vllm_preemptions": None,
             "vllm_metrics_sample_errors": 0,
         }
@@ -1263,6 +1426,51 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
         VLLM_LOCAL_CACHE_HIT_TOKENS,
         "vllm:prompt_tokens_cached",
     )
+    speculative_draft_tokens = counter_delta(
+        "vllm:spec_decode_num_draft_tokens_total"
+    )
+    speculative_accepted_tokens = counter_delta(
+        "vllm:spec_decode_num_accepted_tokens_total"
+    )
+    speculative_emitted_tokens = counter_delta(
+        "vllm:spec_decode_num_emitted_tokens_total"
+    )
+
+    def matching_metric_names(prefix: str) -> list[str]:
+        return sorted(
+            {
+                metric
+                for record in snapshots
+                for metric in record.get("metrics", {})
+                if metric.startswith(prefix + "{worker=")
+            }
+        )
+
+    router_attempt_deltas = [
+        value
+        for metric in matching_metric_names("llm_router_worker_attempts_total")
+        if (value := counter_delta(metric)) is not None
+    ]
+    router_failure_deltas = [
+        value
+        for metric in matching_metric_names("llm_router_worker_failures_total")
+        if (value := counter_delta(metric)) is not None
+    ]
+    router_circuit_metrics = matching_metric_names(
+        "llm_router_worker_circuit_open"
+    )
+    router_circuit_open_workers_max = (
+        max(
+            sum(
+                1
+                for metric in router_circuit_metrics
+                if safe_float(record.get("metrics", {}).get(metric)) not in (None, 0)
+            )
+            for record in snapshots
+        )
+        if snapshots and router_circuit_metrics
+        else None
+    )
 
     return {
         "vllm_requests_running_max": maximum("vllm:num_requests_running"),
@@ -1279,6 +1487,31 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
         "vllm_request_prefill_count": counter_delta(
             "vllm:request_prefill_time_seconds_count"
         ),
+        "vllm_spec_decode_draft_tokens": speculative_draft_tokens,
+        "vllm_spec_decode_accepted_tokens": speculative_accepted_tokens,
+        "vllm_spec_decode_emitted_tokens": speculative_emitted_tokens,
+        "vllm_spec_decode_acceptance_rate": (
+            speculative_accepted_tokens / speculative_draft_tokens
+            if speculative_accepted_tokens is not None
+            and speculative_draft_tokens not in (None, 0)
+            else None
+        ),
+        "router_retries": counter_delta("llm_router_retries_total"),
+        "router_failures": (
+            sum(router_failure_deltas) if router_failure_deltas else None
+        ),
+        "router_no_healthy_worker": counter_delta(
+            "llm_router_no_healthy_worker_total"
+        ),
+        "router_worker_attempt_imbalance_pct": (
+            (max(router_attempt_deltas) - min(router_attempt_deltas))
+            / max(router_attempt_deltas)
+            * 100
+            if len(router_attempt_deltas) >= 2
+            and max(router_attempt_deltas) > 0
+            else 0.0 if len(router_attempt_deltas) == 1 else None
+        ),
+        "router_circuit_open_workers_max": router_circuit_open_workers_max,
         "vllm_preemptions": counter_delta("vllm:num_preemptions"),
         "vllm_metrics_sample_errors": sample_errors,
     }
@@ -1353,6 +1586,11 @@ def summarize_workload(
         if estimated_gpu_cost_usd is not None and total_tokens > 0
         else None
     )
+    cost_per_successful_request_usd = (
+        estimated_gpu_cost_usd / success_count
+        if estimated_gpu_cost_usd is not None and success_count > 0
+        else None
+    )
     configured_prompt_targets = [
         int(value) for value in (workload.get("prompt_tokens_pattern") or [])
     ]
@@ -1412,6 +1650,14 @@ def summarize_workload(
         "admission_rejected_count": sum(
             1 for row in results if row.get("error_type") == "admission_rejected"
         ),
+        "nccl_error_count": sum(
+            1 for row in results if row.get("error_type") == "nccl_error"
+        ),
+        "distributed_worker_error_count": sum(
+            1
+            for row in results
+            if row.get("error_type") == "distributed_worker_error"
+        ),
         "error_rate": (request_count - success_count) / request_count if request_count else None,
         "timeout_rate": sum(1 for row in results if row.get("timeout")) / request_count if request_count else None,
         "latency_p50_s": percentile(latencies, 0.50),
@@ -1433,10 +1679,17 @@ def summarize_workload(
         "output_tokens_per_sec": output_tokens / wall_time_s if wall_time_s > 0 else None,
         "total_tokens_per_sec": total_tokens / wall_time_s if wall_time_s > 0 else None,
         "gpu_memory_used_mb_max": gpu_summary.get("gpu_memory_used_mb_max"),
+        "gpu_count_observed": gpu_summary.get("gpu_count_observed"),
         "gpu_memory_utilization_pct_max": gpu_summary.get(
             "gpu_memory_utilization_pct_max"
         ),
         "gpu_utilization_pct_avg": gpu_summary.get("gpu_utilization_pct_avg"),
+        "gpu_memory_used_imbalance_mb": gpu_summary.get(
+            "gpu_memory_used_imbalance_mb"
+        ),
+        "gpu_utilization_imbalance_pct": gpu_summary.get(
+            "gpu_utilization_imbalance_pct"
+        ),
         "vllm_requests_running_max": vllm_metrics_summary.get(
             "vllm_requests_running_max"
         ),
@@ -1461,6 +1714,29 @@ def summarize_workload(
         "vllm_request_prefill_count": vllm_metrics_summary.get(
             "vllm_request_prefill_count"
         ),
+        "vllm_spec_decode_draft_tokens": vllm_metrics_summary.get(
+            "vllm_spec_decode_draft_tokens"
+        ),
+        "vllm_spec_decode_accepted_tokens": vllm_metrics_summary.get(
+            "vllm_spec_decode_accepted_tokens"
+        ),
+        "vllm_spec_decode_emitted_tokens": vllm_metrics_summary.get(
+            "vllm_spec_decode_emitted_tokens"
+        ),
+        "vllm_spec_decode_acceptance_rate": vllm_metrics_summary.get(
+            "vllm_spec_decode_acceptance_rate"
+        ),
+        "router_retries": vllm_metrics_summary.get("router_retries"),
+        "router_failures": vllm_metrics_summary.get("router_failures"),
+        "router_no_healthy_worker": vllm_metrics_summary.get(
+            "router_no_healthy_worker"
+        ),
+        "router_worker_attempt_imbalance_pct": vllm_metrics_summary.get(
+            "router_worker_attempt_imbalance_pct"
+        ),
+        "router_circuit_open_workers_max": vllm_metrics_summary.get(
+            "router_circuit_open_workers_max"
+        ),
         "vllm_preemptions": vllm_metrics_summary.get("vllm_preemptions"),
         "vllm_metrics_sample_errors": vllm_metrics_summary.get(
             "vllm_metrics_sample_errors"
@@ -1469,6 +1745,7 @@ def summarize_workload(
         "estimated_gpu_cost_usd": estimated_gpu_cost_usd,
         "cost_per_1m_output_tokens_usd": cost_per_1m_output_tokens_usd,
         "cost_per_1m_total_tokens_usd": cost_per_1m_total_tokens_usd,
+        "cost_per_successful_request_usd": cost_per_successful_request_usd,
         "wall_time_s": wall_time_s,
     }
 
@@ -1566,6 +1843,8 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "oom_count",
         "rejected_count",
         "admission_rejected_count",
+        "nccl_error_count",
+        "distributed_worker_error_count",
         "error_rate",
         "timeout_rate",
         "latency_p50_s",
@@ -1580,9 +1859,12 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "requests_per_sec",
         "output_tokens_per_sec",
         "total_tokens_per_sec",
+        "gpu_count_observed",
         "gpu_memory_used_mb_max",
         "gpu_memory_utilization_pct_max",
         "gpu_utilization_pct_avg",
+        "gpu_memory_used_imbalance_mb",
+        "gpu_utilization_imbalance_pct",
         "vllm_requests_running_max",
         "vllm_requests_waiting_max",
         "vllm_kv_cache_usage_pct_max",
@@ -1591,11 +1873,21 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "vllm_prefix_cache_query_tokens",
         "vllm_prompt_tokens_cached",
         "vllm_request_prefill_count",
+        "vllm_spec_decode_draft_tokens",
+        "vllm_spec_decode_accepted_tokens",
+        "vllm_spec_decode_emitted_tokens",
+        "vllm_spec_decode_acceptance_rate",
+        "router_retries",
+        "router_failures",
+        "router_no_healthy_worker",
+        "router_worker_attempt_imbalance_pct",
+        "router_circuit_open_workers_max",
         "vllm_preemptions",
         "vllm_metrics_sample_errors",
         "gpu_hourly_cost_usd",
         "cost_per_1m_output_tokens_usd",
         "cost_per_1m_total_tokens_usd",
+        "cost_per_successful_request_usd",
     ]
     lines = ["# Benchmark Summary", ""]
     lines.append("| " + " | ".join(columns) + " |")
@@ -1736,11 +2028,15 @@ def dry_run(
     model: str,
     base_url: str,
     expected_server_config: dict[str, str] | None = None,
+    deployment_type: str | None = None,
+    deployment_gpu_count: int | None = None,
 ) -> None:
     plan = {
         "model": model,
         "base_url": base_url,
         "expected_server_config": expected_server_config or {},
+        "deployment_type": deployment_type,
+        "deployment_gpu_count": deployment_gpu_count,
         "max_model_len": config.get("max_model_len"),
         "runs": [
             {
@@ -1832,6 +2128,9 @@ def run_benchmark(args: argparse.Namespace) -> int:
     metrics_export_port = getattr(args, "metrics_export_port", None)
     if metrics_export_port is not None and not 1 <= metrics_export_port <= 65535:
         raise ValueError("metrics-export-port must be between 1 and 65535")
+    deployment_gpu_count = getattr(args, "deployment_gpu_count", None)
+    if deployment_gpu_count is not None and deployment_gpu_count < 1:
+        raise ValueError("deployment-gpu-count must be >= 1")
 
     model = os.environ.get("SERVED_MODEL_NAME") or os.environ.get("MODEL_ID") or config.get("model")
     if not model:
@@ -1857,6 +2156,8 @@ def run_benchmark(args: argparse.Namespace) -> int:
             model,
             base_url.rstrip("/"),
             expected_server_config,
+            getattr(args, "deployment_type", None),
+            deployment_gpu_count,
         )
         return 0
 
@@ -1874,6 +2175,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
         getattr(args, "server_launch_command", None),
         expected_server_config,
     )
+    gpu_topology = capture_gpu_topology()
 
     metadata = {
         "run_id": run_id,
@@ -1890,12 +2192,21 @@ def run_benchmark(args: argparse.Namespace) -> int:
         ),
         "server_config_label_is_descriptive_only": True,
         "server_evidence": server_evidence,
+        "gpu_topology": gpu_topology,
+        "parallelism": parallelism_evidence(
+            server_evidence.get("launch_config", {})
+        ),
+        "deployment": {
+            "type": getattr(args, "deployment_type", None),
+            "gpu_count": deployment_gpu_count,
+        },
         "benchmark_environment_hints": {
             key: os.environ[key]
             for key in SERVER_SETTING_ENV_KEYS
             if key in os.environ
         },
         "gpu_hourly_cost_usd": gpu_hourly_cost_usd,
+        "gpu_hourly_cost_scope": "aggregate_for_all_gpus_used_by_this_endpoint",
         "vllm_metrics_sampling_enabled": not getattr(
             args, "disable_vllm_metrics_sampling", False
         ),
@@ -2191,6 +2502,21 @@ def parse_args() -> argparse.Namespace:
             "Exact already-running vLLM command to record when /proc discovery is "
             "unavailable. It does not start or restart vLLM."
         ),
+    )
+    parser.add_argument(
+        "--deployment-type",
+        choices=[
+            "single_gpu",
+            "tensor_parallel",
+            "replicas",
+            "pipeline_parallel",
+        ],
+        help="Declared architecture for cross-run analysis; command evidence is still recorded.",
+    )
+    parser.add_argument(
+        "--deployment-gpu-count",
+        type=int,
+        help="Total GPUs whose cost belongs to this endpoint, including remote replicas.",
     )
     parser.add_argument(
         "--expect-server-config",
