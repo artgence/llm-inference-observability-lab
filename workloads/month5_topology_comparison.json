@@ -1,5 +1,6 @@
 {
   "description": "Month 5 controlled single-GPU versus tensor-parallel topology comparison.",
+  "hardware_plan": "Two NVIDIA H100 SXM GPUs: compare a one-GPU control with TP=2 using the identical workload.",
   "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
   "base_url": "http://localhost:8000",
   "api_key": "EMPTY",

@@ -1,5 +1,6 @@
 {
   "description": "Month 5 baseline versus n-gram speculative decoding at low and moderate request rates.",
+  "hardware_plan": "NVIDIA H100 SXM control: run baseline and speculative decoding on the same one-GPU allocation from the two-GPU pool.",
   "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
   "base_url": "http://localhost:8000",
   "api_key": "EMPTY",

@@ -4,19 +4,23 @@ Status: awaiting Month 5 GPU-backed runs.
 
 ## Decision Question
 
-For the tested model and workload, should the service use one larger GPU, tensor
-parallelism across smaller GPUs, or independent replicas behind a router?
+With two NVIDIA H100 SXM GPUs available, should the service use one H100 SXM,
+tensor parallelism across both GPUs, or two independent one-GPU replicas behind a
+router?
 
 ## Deployment Evidence
 
-| Deployment | Exact command | GPUs | Interconnect | TP/PP/replicas | Config verified |
-| --- | --- | ---: | --- | --- | --- |
-| Single-GPU baseline | TBD | TBD | TBD | TBD | TBD |
-| Tensor-parallel candidate | TBD | TBD | TBD | TBD | TBD |
-| Replica candidate | TBD | TBD | TBD | TBD | TBD |
+| Deployment | Exact command | Hardware verified | GPUs | Interconnect | TP/PP/replicas | Config verified |
+| --- | --- | --- | ---: | --- | --- | --- |
+| 1x H100 SXM control | TBD | TBD | 1 | TBD | TP=1 | TBD |
+| 2x H100 SXM, TP=2 | TBD | TBD | 2 | TBD | TP=2 | TBD |
+| Two independent 1x H100 SXM replicas | TBD | TBD per replica | 2 | N/A between replicas | Replicas=2 | TBD |
 
 Record the topology matrix, CUDA/NCCL versions and settings, exact model revision,
-aggregate hourly GPU cost, and vLLM `/metrics` configuration.
+aggregate hourly H100 SXM cost, and vLLM `/metrics` configuration. Record the
+results of `--expect-gpu-name H100` and the benchmark host's actual
+`--expect-local-gpu-count`; for remote replicas, verify the model/count on each
+serving host instead of using the router host.
 
 ## Sharding Versus Replication
 
@@ -52,7 +56,7 @@ sacrificing saturated throughput/cost.
 ## NCCL and Topology Notes
 
 - Collectives relevant to tested TP configuration: TBD
-- PCIe/NVLink topology evidence: TBD
+- H100 SXM/NVLink topology evidence: TBD
 - NCCL/distributed errors observed: TBD
 - Why TP was or was not worth its communication cost: TBD
 

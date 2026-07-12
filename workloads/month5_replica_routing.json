@@ -1,5 +1,6 @@
 {
   "description": "Month 5 replica-router policy, burst, and failure behavior.",
+  "hardware_plan": "Two NVIDIA H100 SXM GPUs: run two independent one-GPU vLLM replicas behind the router.",
   "model": "neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8",
   "base_url": "http://localhost:9000",
   "api_key": "EMPTY",

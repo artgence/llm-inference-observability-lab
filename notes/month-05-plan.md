@@ -2,8 +2,9 @@
 
 Goal: answer one production inference question:
 
-> For a fixed model and workload, should the service use one larger GPU, tensor
-> parallelism across smaller GPUs, or independent vLLM replicas behind a router?
+> With two NVIDIA H100 SXM GPUs available, should the service use one H100 SXM,
+> tensor parallelism across both GPUs, or two independent one-GPU vLLM replicas
+> behind a router?
 
 This is not a distributed-training course or an acronym survey. Every experiment
 must explain a model-fit, latency, throughput, failure-isolation, topology, or cost
@@ -57,6 +58,11 @@ disaggregation remain interview-level concepts.
 
 ## Experimental Controls
 
+Month 5 uses one fixed hardware pool: **2x NVIDIA H100 SXM**. The controlled
+comparison is 1x H100 SXM, 2x H100 SXM with TP=2, and two independent replicas
+using 1x H100 SXM each. Do not mix another GPU type into the Month 5 architecture
+conclusion.
+
 Keep these identical inside each comparison:
 
 - model repository, revision, tokenizer, and quantization
@@ -69,7 +75,8 @@ Use one warmup plus at least three measured repetitions for final results. The
 benchmark must record:
 
 - actual startup/router command and passed `--expect-server-config` comparisons
-- GPU count and topology matrix
+- GPU model/count and topology matrix, verified with `--expect-gpu-name H100` and
+  the benchmark-host-appropriate `--expect-local-gpu-count`
 - TP/PP/replica declaration
 - before/after drain evidence
 - before/after cumulative metric deltas
@@ -81,10 +88,9 @@ client bottleneck, or prompt/output parity materially differs.
 
 | Deployment | Required? | Model/workload | Purpose |
 | --- | --- | --- | --- |
-| One GPU | Yes | Same model and `month5_topology_comparison.json` | Latency, memory, throughput, and cost baseline |
-| TP across two GPUs | Yes when available | Same model/revision/workload | Measure communication overhead and memory distribution |
-| Two independent replicas | Yes | Same model/revision/workload through router | Measure aggregate throughput, routing, and failure isolation |
-| One H200 | Optional | Same model/revision/workload | Larger-single-GPU comparison against 2x L40S TP |
+| 1x H100 SXM control | Yes | Same model and `month5_topology_comparison.json` | Latency, memory, throughput, and cost baseline |
+| 2x H100 SXM, TP=2 | Yes | Same model/revision/workload | Measure TP communication overhead and memory distribution on the SXM topology |
+| Two independent 1x H100 SXM replicas | Yes | Same model/revision/workload through router | Measure aggregate throughput, routing, and failure isolation |
 | PP | Optional | Only if fit/topology justifies it | Secondary comparison, not the center of Month 5 |
 
 Do not compare different models and call the result a topology comparison. A 70B
@@ -107,18 +113,26 @@ Run the shared workload:
 ```bash
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month5_topology_comparison.json \
-  --server-config-label l40s_tp2 \
+  --server-config-label h100_sxm_tp2 \
   --deployment-type tensor_parallel \
   --deployment-gpu-count 2 \
+  --expect-gpu-name H100 \
+  --expect-local-gpu-count 2 \
   --expect-server-config tensor_parallel_size=2 \
   --expect-server-config max_model_len=16384 \
-  --gpu-hourly-cost-usd TOTAL_COST_OF_TWO_GPUS
+  --gpu-hourly-cost-usd TOTAL_COST_OF_TWO_H100_SXM_PER_HOUR
 ```
 
-Run the identical workload on the single-GPU control with
-`--deployment-type single_gpu --deployment-gpu-count 1`, an explicit
+Run the identical workload on the 1x H100 SXM control with
+`--server-config-label h100_sxm_single`,
+`--deployment-type single_gpu --deployment-gpu-count 1`,
+`--expect-gpu-name H100`,
+`--gpu-hourly-cost-usd COST_OF_ONE_H100_SXM_PER_HOUR`, an explicit
 `--tensor-parallel-size 1` startup flag, and matching
-`--expect-server-config tensor_parallel_size=1`.
+`--expect-server-config tensor_parallel_size=1`. Use
+`--expect-local-gpu-count 1` on a one-GPU host or `2` when this control is pinned to
+one GPU on the same two-GPU host; this local inventory check is intentionally
+separate from `--deployment-gpu-count 1`.
 
 Measure:
 
@@ -131,8 +145,8 @@ Measure:
 Interpretation target:
 
 > TP solves model-fit or KV-capacity constraints, but it is not automatically
-> faster. Frequent communication can increase TPOT and tail latency, especially on
-> a weak PCIe topology.
+> faster. The H100 SXM/NVLink topology reduces transfer cost, but TP collectives can
+> still increase TPOT and tail latency when the model already fits on one GPU.
 
 ## NCCL and Topology Notes
 
@@ -157,8 +171,10 @@ latency runs.
 Inference replicas are not training DDP. Each replica holds the complete model, and
 one request is assigned to one replica.
 
-Use two separate Runpod endpoints or a clean image with explicit GPU assignment.
-Do not start extra servers inside a pod whose PID 1 already owns its GPU.
+Use two independently configured endpoints, each pinned to one H100 SXM, or a clean
+two-GPU image whose initial launch configuration starts both replicas with explicit
+GPU assignment. Do not start extra servers inside a pod whose PID 1 already owns
+the GPUs.
 
 Start the router:
 
@@ -175,13 +191,13 @@ Benchmark:
 ```bash
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month5_replica_routing.json \
-  --server-config-label replicas_round_robin \
+  --server-config-label h100_sxm_replicas_round_robin \
   --server-launch-command \
     'python3 routing/router.py --worker replica_a=http://REPLICA_A:8000 --worker replica_b=http://REPLICA_B:8000 --policy round_robin --port 9000' \
   --deployment-type replicas \
   --deployment-gpu-count 2 \
   --expect-server-config policy=round_robin \
-  --gpu-hourly-cost-usd TOTAL_COST_OF_TWO_REPLICAS
+  --gpu-hourly-cost-usd TOTAL_COST_OF_TWO_H100_SXM_PER_HOUR
 ```
 
 Repeat with `least_inflight` and `latency_aware`.
@@ -192,7 +208,10 @@ balance, retries, circuit state, successful-request cost, and behavior under bur
 When replicas are remote pods, the benchmark process cannot obtain their
 `nvidia-smi` data. Collect GPU utilization/memory on each replica pod (or with a
 shared DCGM/Prometheus source) and join it by run window. Do not interpret the
-router host's `gpu_metrics.csv` as replica GPU balance.
+router host's `gpu_metrics.csv` as replica GPU balance. Verify each replica reports
+an H100 and exactly one local GPU before the run; the benchmark's local
+`--expect-gpu-name` and `--expect-local-gpu-count` checks apply only when it runs on
+the same host as the serving GPU.
 
 Interpretation target:
 
@@ -216,6 +235,12 @@ Compare round-robin with latency-aware routing. Report retry amplification,
 successful RPS, p99, timeout rate, worker imbalance, circuit opens, and recovery.
 
 ## Experiment 4: Speculative Decoding
+
+Run both decoding cases on the 1x H100 SXM control so the second GPU and TP
+communication do not become extra variables. Use
+`--expect-gpu-name H100` and the benchmark host's actual local GPU count for both
+runs, declare `--deployment-gpu-count 1`, and charge
+`COST_OF_ONE_H100_SXM_PER_HOUR` when only one H100 is allocated/billed.
 
 Run `workloads/month5_speculative_decoding.json` against:
 
@@ -247,7 +272,7 @@ measured latency benefit exceeds drafting/verification overhead.
 ## PP and EP Boundaries
 
 - PP: understand stage partitioning and pipeline bubbles. Run it only if a model-fit
-  or non-NVLink topology question justifies the cost.
+  question justifies the cost after the required H100 SXM comparisons.
 - EP: understand that MoE token routing can create expert imbalance and
   synchronization. No EP implementation is required.
 
@@ -276,9 +301,10 @@ Report 05: Parallelism, Decoding, and Routing Trade-offs in vLLM Serving
 
 The final interview-level statement should be:
 
-> I compared model sharding, independent replicas, and routing for LLM inference,
-> including NCCL/topology, latency, memory, failures, and cost. I used TP when fit or
-> KV capacity required it and preferred replicas when the model fit per GPU and
+> Using the same two-H100-SXM hardware pool, I compared one-GPU serving, TP=2
+> sharding, and two independent one-GPU replicas for LLM inference, including
+> NCCL/topology, latency, memory, failures, and cost. I used TP when fit or KV
+> capacity required it and preferred replicas when the model fit per GPU and
 > throughput/failure isolation were the primary goals.
 
 ## References

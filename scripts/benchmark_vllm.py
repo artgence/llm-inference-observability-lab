@@ -641,6 +641,42 @@ def capture_gpu_topology() -> dict[str, Any]:
     return evidence
 
 
+def compare_gpu_topology(
+    gpu_topology: dict[str, Any],
+    expected_name: str | None,
+    expected_local_gpu_count: int | None,
+) -> list[dict[str, Any]]:
+    """Compare locally visible GPU evidence with explicit benchmark expectations."""
+    comparisons: list[dict[str, Any]] = []
+    gpus = gpu_topology.get("gpus") or []
+    observed_names = [str(gpu.get("name", "")) for gpu in gpus]
+    if expected_name:
+        expected_normalized = expected_name.strip().lower()
+        comparisons.append(
+            {
+                "setting": "gpu_name_contains",
+                "expected": expected_name,
+                "observed": observed_names,
+                "matched": bool(observed_names)
+                and all(
+                    expected_normalized in observed.lower()
+                    for observed in observed_names
+                ),
+            }
+        )
+    if expected_local_gpu_count is not None:
+        observed_count = gpu_topology.get("gpu_count")
+        comparisons.append(
+            {
+                "setting": "local_gpu_count",
+                "expected": expected_local_gpu_count,
+                "observed": observed_count,
+                "matched": observed_count == expected_local_gpu_count,
+            }
+        )
+    return comparisons
+
+
 def parallelism_evidence(launch_config: dict[str, Any]) -> dict[str, Any]:
     return {
         "tensor_parallel_size": launch_config.get("tensor_parallel_size", 1),
@@ -2030,6 +2066,8 @@ def dry_run(
     expected_server_config: dict[str, str] | None = None,
     deployment_type: str | None = None,
     deployment_gpu_count: int | None = None,
+    expected_gpu_name: str | None = None,
+    expected_local_gpu_count: int | None = None,
 ) -> None:
     plan = {
         "model": model,
@@ -2037,6 +2075,9 @@ def dry_run(
         "expected_server_config": expected_server_config or {},
         "deployment_type": deployment_type,
         "deployment_gpu_count": deployment_gpu_count,
+        "expected_gpu_name": expected_gpu_name,
+        "expected_local_gpu_count": expected_local_gpu_count,
+        "hardware_plan": config.get("hardware_plan"),
         "max_model_len": config.get("max_model_len"),
         "runs": [
             {
@@ -2131,6 +2172,12 @@ def run_benchmark(args: argparse.Namespace) -> int:
     deployment_gpu_count = getattr(args, "deployment_gpu_count", None)
     if deployment_gpu_count is not None and deployment_gpu_count < 1:
         raise ValueError("deployment-gpu-count must be >= 1")
+    expected_local_gpu_count = getattr(args, "expect_local_gpu_count", None)
+    if expected_local_gpu_count is not None and expected_local_gpu_count < 1:
+        raise ValueError("expect-local-gpu-count must be >= 1")
+    expected_gpu_name = getattr(args, "expect_gpu_name", None)
+    if expected_gpu_name is not None and not expected_gpu_name.strip():
+        raise ValueError("expect-gpu-name must not be empty")
 
     model = os.environ.get("SERVED_MODEL_NAME") or os.environ.get("MODEL_ID") or config.get("model")
     if not model:
@@ -2158,6 +2205,8 @@ def run_benchmark(args: argparse.Namespace) -> int:
             expected_server_config,
             getattr(args, "deployment_type", None),
             deployment_gpu_count,
+            expected_gpu_name,
+            expected_local_gpu_count,
         )
         return 0
 
@@ -2176,6 +2225,11 @@ def run_benchmark(args: argparse.Namespace) -> int:
         expected_server_config,
     )
     gpu_topology = capture_gpu_topology()
+    hardware_comparisons = compare_gpu_topology(
+        gpu_topology,
+        expected_gpu_name,
+        expected_local_gpu_count,
+    )
 
     metadata = {
         "run_id": run_id,
@@ -2185,6 +2239,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
         "base_url": base_url.rstrip("/"),
         "workload_file": str(Path(args.workload)),
         "workload_description": config.get("description"),
+        "workload_hardware_plan": config.get("hardware_plan"),
         "max_model_len": config.get("max_model_len"),
         "server_config_label": (
             getattr(args, "server_config_label", None)
@@ -2193,6 +2248,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
         "server_config_label_is_descriptive_only": True,
         "server_evidence": server_evidence,
         "gpu_topology": gpu_topology,
+        "hardware_comparisons": hardware_comparisons,
         "parallelism": parallelism_evidence(
             server_evidence.get("launch_config", {})
         ),
@@ -2233,6 +2289,19 @@ def run_benchmark(args: argparse.Namespace) -> int:
         raise RuntimeError(
             "actual vLLM configuration did not match --expect-server-config: "
             + json.dumps(config_mismatches)
+        )
+    hardware_mismatches = [
+        comparison
+        for comparison in hardware_comparisons
+        if not comparison["matched"]
+    ]
+    if hardware_mismatches:
+        metadata["status"] = "hardware_evidence_mismatch"
+        metadata["ended_at"] = utc_now()
+        metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        raise RuntimeError(
+            "local GPU evidence did not match the requested hardware: "
+            + json.dumps(hardware_mismatches)
         )
 
     gpu_sampler = GpuSampler(gpu_path, args.gpu_sample_interval)
@@ -2517,6 +2586,21 @@ def parse_args() -> argparse.Namespace:
         "--deployment-gpu-count",
         type=int,
         help="Total GPUs whose cost belongs to this endpoint, including remote replicas.",
+    )
+    parser.add_argument(
+        "--expect-gpu-name",
+        help=(
+            "Require every locally visible nvidia-smi GPU name to contain this "
+            "case-insensitive text (for example, H100)."
+        ),
+    )
+    parser.add_argument(
+        "--expect-local-gpu-count",
+        type=int,
+        help=(
+            "Require nvidia-smi to report this many GPUs on the benchmark host. "
+            "This is separate from --deployment-gpu-count."
+        ),
     )
     parser.add_argument(
         "--expect-server-config",

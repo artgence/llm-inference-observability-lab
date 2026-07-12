@@ -71,16 +71,29 @@ def load_run(run_dir: Path) -> list[dict[str, Any]]:
     verified = bool(comparisons) and all(
         comparison.get("matched") for comparison in comparisons
     )
+    hardware_comparisons = metadata.get("hardware_comparisons") or []
+    hardware_verified = bool(hardware_comparisons) and all(
+        comparison.get("matched") for comparison in hardware_comparisons
+    )
     label = metadata.get("server_config_label") or run_dir.name
     gpu_count = deployment.get("gpu_count")
     if gpu_count is None:
         gpu_count = (metadata.get("gpu_topology") or {}).get("gpu_count")
+    gpu_models = sorted(
+        {
+            str(gpu.get("name"))
+            for gpu in (metadata.get("gpu_topology") or {}).get("gpus", [])
+            if gpu.get("name")
+        }
+    )
     for row in rows:
         row.update(
             {
                 "deployment_label": label,
                 "deployment_type": deployment.get("type") or "unspecified",
                 "deployment_gpu_count": gpu_count,
+                "gpu_models": ", ".join(gpu_models) or "unavailable",
+                "hardware_verified": hardware_verified,
                 "tensor_parallel_size": parallelism.get(
                     "tensor_parallel_size", 1
                 ),
@@ -227,6 +240,8 @@ def render_evidence(rows: list[dict[str, Any]]) -> list[str]:
             {
                 "type": row.get("deployment_type"),
                 "gpus": row.get("deployment_gpu_count"),
+                "hardware": row.get("gpu_models"),
+                "hardware_verified": row.get("hardware_verified"),
                 "tp": row.get("tensor_parallel_size"),
                 "verified": row.get("server_config_verified"),
                 "command": row.get("server_launch_command"),
@@ -234,13 +249,15 @@ def render_evidence(rows: list[dict[str, Any]]) -> list[str]:
             },
         )
     lines = [
-        "| deployment | type | GPUs | TP | config verified | command | topology captured |",
-        "| --- | --- | ---: | ---: | --- | --- | --- |",
+        "| deployment | type | hardware | hardware verified | GPUs | TP | config verified | command | topology captured |",
+        "| --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
     ]
     for label, evidence in deployments.items():
         command = str(evidence["command"]).replace("|", "\\|")
         lines.append(
-            f"| {label} | {evidence['type']} | {fmt(evidence['gpus'])} | "
+            f"| {label} | {evidence['type']} | {evidence['hardware']} | "
+            f"{evidence['hardware_verified']} | "
+            f"{fmt(evidence['gpus'])} | "
             f"{fmt(evidence['tp'])} | {evidence['verified']} | `{command}` | "
             f"{bool(evidence['topology'])} |"
         )

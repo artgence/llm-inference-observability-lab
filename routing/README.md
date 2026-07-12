@@ -4,9 +4,14 @@ This module routes OpenAI-compatible streaming requests across independent vLLM
 replicas. It models inference data parallelism: one request is assigned to one
 replica, and every replica holds a full model copy.
 
+The Month 5 target is a fixed pool of **2x NVIDIA H100 SXM**: replica A uses one
+H100 SXM and replica B uses the other. This is compared against the 1x H100 SXM
+control and the same two GPUs configured as TP=2.
+
 Do not start extra vLLM processes inside a Runpod image whose PID 1 already owns its
-GPU and port. Use two separately configured pods/endpoints, or use a clean base image
-where each replica has an explicitly assigned GPU.
+GPUs and port. Use two separately configured one-H100-SXM pods/endpoints, or use a
+clean two-GPU image whose initial launch configuration assigns one H100 SXM to each
+replica.
 
 ## Start the Router
 
@@ -35,10 +40,12 @@ on another replica before any response has been sent to the client.
 VLLM_BASE_URL=http://127.0.0.1:9000 \
 python3 scripts/benchmark_vllm.py \
   --workload workloads/month5_replica_routing.json \
-  --server-config-label replicas_round_robin \
+  --server-config-label h100_sxm_replicas_round_robin \
   --server-launch-command \
     'python3 routing/router.py --worker replica_a=http://REPLICA_A:8000 --worker replica_b=http://REPLICA_B:8000 --policy round_robin --port 9000' \
-  --gpu-hourly-cost-usd TOTAL_COST_OF_BOTH_REPLICAS
+  --deployment-type replicas \
+  --deployment-gpu-count 2 \
+  --gpu-hourly-cost-usd TOTAL_COST_OF_TWO_H100_SXM_PER_HOUR
 ```
 
 Repeat with `least_inflight` and `latency_aware`. The benchmark drain guard works
@@ -47,7 +54,10 @@ through the router because router `/metrics` exports aggregate
 
 If the replicas are remote pods, collect GPU memory/utilization on each replica.
 The benchmark's local `gpu_metrics.csv` describes only the router/benchmark host and
-must not be presented as remote replica GPU balance.
+must not be presented as remote replica GPU balance. Verify that each serving host
+reports an H100 and exactly one local GPU before measuring. Local benchmark runs can
+enforce this with `--expect-gpu-name H100 --expect-local-gpu-count 1`; those flags
+must not be used against the router host as a substitute for per-replica evidence.
 
 ## Slow or Failing Replica
 

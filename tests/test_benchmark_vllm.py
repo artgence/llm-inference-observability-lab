@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from scripts.benchmark_vllm import (
     classify_error,
+    compare_gpu_topology,
     compare_server_config,
     evaluate_prompt_parity,
     extract_vllm_config_metrics,
@@ -26,6 +27,29 @@ from scripts.benchmark_vllm import (
 
 
 class ServerEvidenceTests(unittest.TestCase):
+    def test_h100_hardware_evidence_matches_name_and_count(self) -> None:
+        comparisons = compare_gpu_topology(
+            {
+                "gpu_count": 2,
+                "gpus": [
+                    {"name": "NVIDIA H100 80GB HBM3"},
+                    {"name": "NVIDIA H100 80GB HBM3"},
+                ],
+            },
+            "H100",
+            2,
+        )
+        self.assertTrue(all(item["matched"] for item in comparisons))
+
+    def test_hardware_evidence_rejects_wrong_gpu_family(self) -> None:
+        comparisons = compare_gpu_topology(
+            {"gpu_count": 2, "gpus": [{"name": "NVIDIA A100-SXM4-80GB"}]},
+            "H100",
+            2,
+        )
+        self.assertFalse(comparisons[0]["matched"])
+        self.assertTrue(comparisons[1]["matched"])
+
     def test_launch_and_metrics_config_match_expected_values(self) -> None:
         launch = launch_config_from_argv(
             [
@@ -181,8 +205,8 @@ class MetricWindowTests(unittest.TestCase):
             path.write_text(
                 "collected_at,workload,gpu_index,gpu_name,memory_used_mb,"
                 "memory_total_mb,gpu_utilization_pct\n"
-                "t,w,0,L40S,10000,46000,80\n"
-                "t,w,1,L40S,12000,46000,60\n",
+                "t,w,0,NVIDIA H100 80GB HBM3,10000,80000,80\n"
+                "t,w,1,NVIDIA H100 80GB HBM3,12000,80000,60\n",
                 encoding="utf-8",
             )
             summary = load_gpu_summary(path, "w")
