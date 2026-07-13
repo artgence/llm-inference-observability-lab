@@ -53,6 +53,15 @@ VLLM_METRICS = {
     "llm_router_worker_failures_total",
     "llm_router_worker_circuit_open",
     "llm_router_worker_ewma_latency_seconds",
+    "llm_router_worker_upstream_running",
+    "llm_router_worker_upstream_waiting",
+    "llm_router_worker_upstream_metrics_up",
+    "llm_router_worker_upstream_metrics_complete",
+    "llm_router_worker_routable",
+    "llm_router_worker_attempt_duration_seconds_sum",
+    "llm_router_worker_attempt_duration_seconds_count",
+    "llm_router_worker_cancellations_total",
+    "llm_router_upstream_metrics_complete",
     # Compatibility with older vLLM metric names and saved benchmark samples.
     "vllm:prefix_cache_hits",
     "vllm:prefix_cache_queries",
@@ -66,6 +75,14 @@ ROUTER_WORKER_METRICS = {
     "llm_router_worker_failures_total",
     "llm_router_worker_circuit_open",
     "llm_router_worker_ewma_latency_seconds",
+    "llm_router_worker_upstream_running",
+    "llm_router_worker_upstream_waiting",
+    "llm_router_worker_upstream_metrics_up",
+    "llm_router_worker_upstream_metrics_complete",
+    "llm_router_worker_routable",
+    "llm_router_worker_attempt_duration_seconds_sum",
+    "llm_router_worker_attempt_duration_seconds_count",
+    "llm_router_worker_cancellations_total",
 }
 VLLM_LOCAL_CACHE_HIT_TOKENS = (
     'vllm:prompt_tokens_by_source_total{source="local_cache_hit"}'
@@ -1052,6 +1069,32 @@ class BenchmarkMetricsServer:
         self.thread.join(timeout=2)
 
 
+def router_response_fields(headers: Any) -> dict[str, Any]:
+    if headers is None:
+        return {
+            "router_selected_worker": None,
+            "router_attempt_number": None,
+            "router_attempt_history": None,
+            "router_request_id": None,
+        }
+    raw_attempt = headers.get("X-Router-Attempt")
+    try:
+        attempt_number = int(raw_attempt) if raw_attempt is not None else None
+    except (TypeError, ValueError):
+        attempt_number = None
+    raw_history = headers.get("X-Router-Attempt-History")
+    return {
+        "router_selected_worker": headers.get("X-Router-Worker"),
+        "router_attempt_number": attempt_number,
+        "router_attempt_history": (
+            [worker for worker in raw_history.split(",") if worker]
+            if raw_history
+            else None
+        ),
+        "router_request_id": headers.get("X-Request-ID"),
+    }
+
+
 def post_streaming_chat(
     endpoint: str,
     api_key: str,
@@ -1169,9 +1212,11 @@ def post_streaming_chat(
 
     started_at = utc_now()
     started_perf = time.perf_counter()
+    routing_fields = router_response_fields(None)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status_code = response.status
+            routing_fields = router_response_fields(response.headers)
             for raw_line in response:
                 line = raw_line.decode("utf-8", "replace").strip()
                 if not line or not line.startswith("data:"):
@@ -1209,6 +1254,7 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": body[:1000],
             "latency_s": ended_perf - started_perf,
+            **router_response_fields(exc.headers),
             **scheduling_fields(started_perf, ended_perf, "request_send"),
             **admission_fields,
             "timeout": error_type == "timeout",
@@ -1228,6 +1274,7 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": message[:1000],
             "latency_s": ended_perf - started_perf,
+            **routing_fields,
             **scheduling_fields(started_perf, ended_perf, "request_send"),
             **admission_fields,
             "timeout": error_type == "timeout",
@@ -1247,6 +1294,7 @@ def post_streaming_chat(
             "error_type": error_type,
             "error_message": message[:1000],
             "latency_s": ended_perf - started_perf,
+            **routing_fields,
             **scheduling_fields(started_perf, ended_perf, "request_send"),
             **admission_fields,
             "timeout": error_type == "timeout",
@@ -1290,6 +1338,7 @@ def post_streaming_chat(
         "success": True,
         "status_code": status_code,
         "latency_s": ended_perf - started_perf,
+        **routing_fields,
         **scheduling_fields(started_perf, ended_perf, "request_send"),
         **admission_fields,
         "ttft_s": ttft_s,
@@ -1362,17 +1411,17 @@ def load_gpu_summary(
         "gpu_memory_used_imbalance_mb": (
             max(memory_max_by_gpu) - min(memory_max_by_gpu)
             if len(memory_max_by_gpu) >= 2
-            else 0.0 if len(memory_max_by_gpu) == 1 else None
+            else None
         ),
         "gpu_utilization_imbalance_pct": (
             max(utilization_avg_by_gpu) - min(utilization_avg_by_gpu)
             if len(utilization_avg_by_gpu) >= 2
-            else 0.0 if len(utilization_avg_by_gpu) == 1 else None
+            else None
         ),
     }
 
 
-def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float | int | None]:
+def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, Any]:
     if not path.exists():
         return {
             "vllm_requests_running_max": None,
@@ -1392,6 +1441,19 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
             "router_no_healthy_worker": None,
             "router_worker_attempt_imbalance_pct": None,
             "router_circuit_open_workers_max": None,
+            "router_worker_identities": None,
+            "router_worker_request_counts": None,
+            "router_worker_success_counts": None,
+            "router_worker_error_counts": None,
+            "router_worker_cancellation_counts": None,
+            "router_worker_latency_seconds_avg": None,
+            "router_worker_latency_ewma_seconds_end": None,
+            "router_worker_active_requests_max_observed": None,
+            "router_worker_engine_running_requests_max_observed": None,
+            "router_worker_queue_depth_max_observed": None,
+            "router_worker_health_states": None,
+            "router_worker_metrics_complete": None,
+            "router_upstream_metrics_complete": None,
             "vllm_preemptions": None,
             "vllm_metrics_sample_errors": 0,
         }
@@ -1429,6 +1491,13 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
         ]
         present = [value * scale for value in values if value is not None]
         return max(present) if present else None
+
+    def latest(metric: str) -> float | None:
+        for record in reversed(snapshots):
+            value = safe_float(record.get("metrics", {}).get(metric))
+            if value is not None:
+                return value
+        return None
 
     def counter_delta(metric: str) -> float | None:
         values = [
@@ -1482,6 +1551,57 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
             }
         )
 
+    def worker_name(metric: str) -> str | None:
+        return parse_prometheus_labels(metric).get("worker")
+
+    def worker_counter_map(prefix: str) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for metric in matching_metric_names(prefix):
+            name = worker_name(metric)
+            value = counter_delta(metric)
+            if name is not None and value is not None:
+                values[name] = value
+        return values
+
+    def worker_maximum_map(prefix: str) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for metric in matching_metric_names(prefix):
+            name = worker_name(metric)
+            present = [
+                value
+                for record in snapshots
+                if (value := safe_float(record.get("metrics", {}).get(metric)))
+                is not None
+            ]
+            if name is not None and present:
+                values[name] = max(present)
+        return values
+
+    def worker_latest_map(prefix: str) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for record in reversed(snapshots):
+            for metric, raw_value in record.get("metrics", {}).items():
+                if not metric.startswith(prefix + "{worker="):
+                    continue
+                name = worker_name(metric)
+                value = safe_float(raw_value)
+                if name is not None and value is not None and name not in values:
+                    values[name] = value
+        return values
+
+    def json_map(values: dict[str, Any]) -> str | None:
+        if not values:
+            return None
+        normalized = {
+            key: (
+                int(value)
+                if isinstance(value, float) and value.is_integer()
+                else value
+            )
+            for key, value in sorted(values.items())
+        }
+        return json.dumps(normalized, separators=(",", ":"), sort_keys=True)
+
     router_attempt_deltas = [
         value
         for metric in matching_metric_names("llm_router_worker_attempts_total")
@@ -1507,6 +1627,80 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
         if snapshots and router_circuit_metrics
         else None
     )
+    router_request_counts = worker_counter_map(
+        "llm_router_worker_attempts_total"
+    )
+    router_success_counts = worker_counter_map(
+        "llm_router_worker_successes_total"
+    )
+    router_error_counts = worker_counter_map(
+        "llm_router_worker_failures_total"
+    )
+    router_cancellation_counts = worker_counter_map(
+        "llm_router_worker_cancellations_total"
+    )
+    router_duration_sums = worker_counter_map(
+        "llm_router_worker_attempt_duration_seconds_sum"
+    )
+    router_duration_counts = worker_counter_map(
+        "llm_router_worker_attempt_duration_seconds_count"
+    )
+    router_latency_seconds_avg = {
+        worker: duration_sum / router_duration_counts[worker]
+        for worker, duration_sum in router_duration_sums.items()
+        if router_duration_counts.get(worker, 0) > 0
+    }
+    router_latency_ewma_seconds_end = worker_latest_map(
+        "llm_router_worker_ewma_latency_seconds"
+    )
+    router_active_requests_max = worker_maximum_map(
+        "llm_router_worker_inflight"
+    )
+    router_engine_running_requests_max = worker_maximum_map(
+        "llm_router_worker_upstream_running"
+    )
+    router_queue_depth_max = worker_maximum_map(
+        "llm_router_worker_upstream_waiting"
+    )
+    router_metrics_up = worker_latest_map(
+        "llm_router_worker_upstream_metrics_up"
+    )
+    router_metrics_complete = worker_latest_map(
+        "llm_router_worker_upstream_metrics_complete"
+    )
+    router_routable = worker_latest_map("llm_router_worker_routable")
+    router_circuit_open = worker_latest_map(
+        "llm_router_worker_circuit_open"
+    )
+    router_workers = sorted(
+        set(router_request_counts)
+        | set(router_success_counts)
+        | set(router_error_counts)
+        | set(router_cancellation_counts)
+        | set(router_latency_seconds_avg)
+        | set(router_latency_ewma_seconds_end)
+        | set(router_active_requests_max)
+        | set(router_engine_running_requests_max)
+        | set(router_queue_depth_max)
+        | set(router_metrics_up)
+        | set(router_metrics_complete)
+        | set(router_routable)
+        | set(router_circuit_open)
+    )
+    router_health_states = {
+        worker: (
+            "circuit_open"
+            if router_circuit_open.get(worker) not in (None, 0)
+            else "routable_metrics_up"
+            if router_metrics_up.get(worker) not in (None, 0)
+            else "metrics_unreachable"
+            if router_metrics_up.get(worker) == 0
+            else "routable_metrics_unknown"
+            if router_routable.get(worker) not in (None, 0)
+            else "unknown"
+        )
+        for worker in router_workers
+    }
 
     return {
         "vllm_requests_running_max": maximum("vllm:num_requests_running"),
@@ -1548,6 +1742,35 @@ def load_vllm_metrics_summary(path: Path, workload_name: str) -> dict[str, float
             else 0.0 if len(router_attempt_deltas) == 1 else None
         ),
         "router_circuit_open_workers_max": router_circuit_open_workers_max,
+        "router_worker_identities": (
+            json.dumps(router_workers, separators=(",", ":"))
+            if router_workers
+            else None
+        ),
+        "router_worker_request_counts": json_map(router_request_counts),
+        "router_worker_success_counts": json_map(router_success_counts),
+        "router_worker_error_counts": json_map(router_error_counts),
+        "router_worker_cancellation_counts": json_map(
+            router_cancellation_counts
+        ),
+        "router_worker_latency_seconds_avg": json_map(
+            router_latency_seconds_avg
+        ),
+        "router_worker_latency_ewma_seconds_end": json_map(
+            router_latency_ewma_seconds_end
+        ),
+        "router_worker_active_requests_max_observed": json_map(
+            router_active_requests_max
+        ),
+        "router_worker_engine_running_requests_max_observed": json_map(
+            router_engine_running_requests_max
+        ),
+        "router_worker_queue_depth_max_observed": json_map(router_queue_depth_max),
+        "router_worker_health_states": json_map(router_health_states),
+        "router_worker_metrics_complete": json_map(router_metrics_complete),
+        "router_upstream_metrics_complete": latest(
+            "llm_router_upstream_metrics_complete"
+        ),
         "vllm_preemptions": counter_delta("vllm:num_preemptions"),
         "vllm_metrics_sample_errors": sample_errors,
     }
@@ -1773,6 +1996,45 @@ def summarize_workload(
         "router_circuit_open_workers_max": vllm_metrics_summary.get(
             "router_circuit_open_workers_max"
         ),
+        "router_worker_identities": vllm_metrics_summary.get(
+            "router_worker_identities"
+        ),
+        "router_worker_request_counts": vllm_metrics_summary.get(
+            "router_worker_request_counts"
+        ),
+        "router_worker_success_counts": vllm_metrics_summary.get(
+            "router_worker_success_counts"
+        ),
+        "router_worker_error_counts": vllm_metrics_summary.get(
+            "router_worker_error_counts"
+        ),
+        "router_worker_cancellation_counts": vllm_metrics_summary.get(
+            "router_worker_cancellation_counts"
+        ),
+        "router_worker_latency_seconds_avg": vllm_metrics_summary.get(
+            "router_worker_latency_seconds_avg"
+        ),
+        "router_worker_latency_ewma_seconds_end": vllm_metrics_summary.get(
+            "router_worker_latency_ewma_seconds_end"
+        ),
+        "router_worker_active_requests_max_observed": vllm_metrics_summary.get(
+            "router_worker_active_requests_max_observed"
+        ),
+        "router_worker_engine_running_requests_max_observed": vllm_metrics_summary.get(
+            "router_worker_engine_running_requests_max_observed"
+        ),
+        "router_worker_queue_depth_max_observed": vllm_metrics_summary.get(
+            "router_worker_queue_depth_max_observed"
+        ),
+        "router_worker_health_states": vllm_metrics_summary.get(
+            "router_worker_health_states"
+        ),
+        "router_worker_metrics_complete": vllm_metrics_summary.get(
+            "router_worker_metrics_complete"
+        ),
+        "router_upstream_metrics_complete": vllm_metrics_summary.get(
+            "router_upstream_metrics_complete"
+        ),
         "vllm_preemptions": vllm_metrics_summary.get("vllm_preemptions"),
         "vllm_metrics_sample_errors": vllm_metrics_summary.get(
             "vllm_metrics_sample_errors"
@@ -1895,6 +2157,7 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "requests_per_sec",
         "output_tokens_per_sec",
         "total_tokens_per_sec",
+        "gpu_telemetry_scope",
         "gpu_count_observed",
         "gpu_memory_used_mb_max",
         "gpu_memory_utilization_pct_max",
@@ -1918,6 +2181,19 @@ def write_summary_md(path: Path, rows: list[dict[str, Any]]) -> None:
         "router_no_healthy_worker",
         "router_worker_attempt_imbalance_pct",
         "router_circuit_open_workers_max",
+        "router_worker_identities",
+        "router_worker_request_counts",
+        "router_worker_success_counts",
+        "router_worker_error_counts",
+        "router_worker_cancellation_counts",
+        "router_worker_latency_seconds_avg",
+        "router_worker_latency_ewma_seconds_end",
+        "router_worker_active_requests_max_observed",
+        "router_worker_engine_running_requests_max_observed",
+        "router_worker_queue_depth_max_observed",
+        "router_worker_health_states",
+        "router_worker_metrics_complete",
+        "router_upstream_metrics_complete",
         "vllm_preemptions",
         "vllm_metrics_sample_errors",
         "gpu_hourly_cost_usd",
@@ -2248,6 +2524,10 @@ def run_benchmark(args: argparse.Namespace) -> int:
         "server_config_label_is_descriptive_only": True,
         "server_evidence": server_evidence,
         "gpu_topology": gpu_topology,
+        "gpu_telemetry_scope": "benchmark_host_visible_gpus_only",
+        "remote_replica_gpu_telemetry_required": (
+            getattr(args, "deployment_type", None) == "replicas"
+        ),
         "hardware_comparisons": hardware_comparisons,
         "parallelism": parallelism_evidence(
             server_evidence.get("launch_config", {})
@@ -2492,17 +2772,19 @@ def run_benchmark(args: argparse.Namespace) -> int:
                 vllm_metrics_summary = load_vllm_metrics_summary(
                     vllm_metrics_path, workload_name
                 )
-                summary_rows.append(
-                    summarize_workload(
-                        workload_name,
-                        workload,
-                        workload_results,
-                        wall_time_s,
-                        gpu_summary,
-                        vllm_metrics_summary,
-                        gpu_hourly_cost_usd,
-                    )
+                summary_row = summarize_workload(
+                    workload_name,
+                    workload,
+                    workload_results,
+                    wall_time_s,
+                    gpu_summary,
+                    vllm_metrics_summary,
+                    gpu_hourly_cost_usd,
                 )
+                summary_row["gpu_telemetry_scope"] = (
+                    "benchmark_host_visible_gpus_only"
+                )
+                summary_rows.append(summary_row)
     except Exception as exc:
         benchmark_failure = exc
         raise

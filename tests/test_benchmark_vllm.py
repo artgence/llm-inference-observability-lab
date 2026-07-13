@@ -22,6 +22,7 @@ from scripts.benchmark_vllm import (
     load_vllm_metrics_summary,
     parallelism_evidence,
     parse_prometheus_metrics,
+    router_response_fields,
     wait_for_server_drain,
 )
 
@@ -117,6 +118,22 @@ class ServerEvidenceTests(unittest.TestCase):
 
 
 class MetricWindowTests(unittest.TestCase):
+    def test_router_response_headers_are_preserved_per_request(self) -> None:
+        fields = router_response_fields(
+            {
+                "X-Router-Worker": "replica_b",
+                "X-Router-Attempt": "2",
+                "X-Router-Attempt-History": "replica_a,replica_b",
+                "X-Request-ID": "request-1",
+            }
+        )
+        self.assertEqual(fields["router_selected_worker"], "replica_b")
+        self.assertEqual(fields["router_attempt_number"], 2)
+        self.assertEqual(
+            fields["router_attempt_history"], ["replica_a", "replica_b"]
+        )
+        self.assertEqual(fields["router_request_id"], "request-1")
+
     def test_counters_use_named_before_and_after_boundaries(self) -> None:
         records = [
             {
@@ -138,8 +155,16 @@ class MetricWindowTests(unittest.TestCase):
                     "llm_router_retries_total": 0,
                     'llm_router_worker_attempts_total{worker="a"}': 0,
                     'llm_router_worker_attempts_total{worker="b"}': 0,
+                    'llm_router_worker_successes_total{worker="a"}': 0,
+                    'llm_router_worker_successes_total{worker="b"}': 0,
                     'llm_router_worker_failures_total{worker="a"}': 0,
                     'llm_router_worker_failures_total{worker="b"}': 0,
+                    'llm_router_worker_cancellations_total{worker="a"}': 0,
+                    'llm_router_worker_cancellations_total{worker="b"}': 0,
+                    'llm_router_worker_attempt_duration_seconds_sum{worker="a"}': 0,
+                    'llm_router_worker_attempt_duration_seconds_sum{worker="b"}': 0,
+                    'llm_router_worker_attempt_duration_seconds_count{worker="a"}': 0,
+                    'llm_router_worker_attempt_duration_seconds_count{worker="b"}': 0,
                 },
             },
             {
@@ -154,10 +179,33 @@ class MetricWindowTests(unittest.TestCase):
                     "llm_router_retries_total": 1,
                     'llm_router_worker_attempts_total{worker="a"}': 8,
                     'llm_router_worker_attempts_total{worker="b"}': 4,
+                    'llm_router_worker_successes_total{worker="a"}': 7,
+                    'llm_router_worker_successes_total{worker="b"}': 4,
                     'llm_router_worker_failures_total{worker="a"}': 1,
                     'llm_router_worker_failures_total{worker="b"}': 0,
                     'llm_router_worker_circuit_open{worker="a"}': 1,
                     'llm_router_worker_circuit_open{worker="b"}': 0,
+                    'llm_router_worker_inflight{worker="a"}': 3,
+                    'llm_router_worker_inflight{worker="b"}': 2,
+                    'llm_router_worker_ewma_latency_seconds{worker="a"}': 0.2,
+                    'llm_router_worker_ewma_latency_seconds{worker="b"}': 0.3,
+                    'llm_router_worker_attempt_duration_seconds_sum{worker="a"}': 1.4,
+                    'llm_router_worker_attempt_duration_seconds_sum{worker="b"}': 1.2,
+                    'llm_router_worker_attempt_duration_seconds_count{worker="a"}': 8,
+                    'llm_router_worker_attempt_duration_seconds_count{worker="b"}': 4,
+                    'llm_router_worker_cancellations_total{worker="a"}': 0,
+                    'llm_router_worker_cancellations_total{worker="b"}': 0,
+                    'llm_router_worker_upstream_running{worker="a"}': 3,
+                    'llm_router_worker_upstream_running{worker="b"}': 2,
+                    'llm_router_worker_upstream_waiting{worker="a"}': 1,
+                    'llm_router_worker_upstream_waiting{worker="b"}': 0,
+                    'llm_router_worker_upstream_metrics_up{worker="a"}': 1,
+                    'llm_router_worker_upstream_metrics_up{worker="b"}': 1,
+                    'llm_router_worker_upstream_metrics_complete{worker="a"}': 1,
+                    'llm_router_worker_upstream_metrics_complete{worker="b"}': 1,
+                    'llm_router_worker_routable{worker="a"}': 0,
+                    'llm_router_worker_routable{worker="b"}': 1,
+                    "llm_router_upstream_metrics_complete": 1,
                 },
             },
             {
@@ -186,6 +234,45 @@ class MetricWindowTests(unittest.TestCase):
         self.assertEqual(summary["router_failures"], 1)
         self.assertEqual(summary["router_worker_attempt_imbalance_pct"], 50)
         self.assertEqual(summary["router_circuit_open_workers_max"], 1)
+        self.assertEqual(summary["router_worker_identities"], '["a","b"]')
+        self.assertEqual(
+            summary["router_worker_request_counts"], '{"a":8,"b":4}'
+        )
+        self.assertEqual(
+            summary["router_worker_success_counts"], '{"a":7,"b":4}'
+        )
+        self.assertEqual(
+            summary["router_worker_error_counts"], '{"a":1,"b":0}'
+        )
+        self.assertEqual(
+            summary["router_worker_cancellation_counts"], '{"a":0,"b":0}'
+        )
+        self.assertEqual(
+            summary["router_worker_latency_seconds_avg"],
+            '{"a":0.175,"b":0.3}',
+        )
+        self.assertEqual(
+            summary["router_worker_latency_ewma_seconds_end"],
+            '{"a":0.2,"b":0.3}',
+        )
+        self.assertEqual(
+            summary["router_worker_active_requests_max_observed"], '{"a":3,"b":2}'
+        )
+        self.assertEqual(
+            summary["router_worker_engine_running_requests_max_observed"],
+            '{"a":3,"b":2}',
+        )
+        self.assertEqual(
+            summary["router_worker_queue_depth_max_observed"], '{"a":1,"b":0}'
+        )
+        self.assertEqual(
+            summary["router_worker_health_states"],
+            '{"a":"circuit_open","b":"routable_metrics_up"}',
+        )
+        self.assertEqual(
+            summary["router_worker_metrics_complete"], '{"a":1,"b":1}'
+        )
+        self.assertEqual(summary["router_upstream_metrics_complete"], 1)
 
     def test_router_worker_labels_are_preserved(self) -> None:
         metrics = parse_prometheus_metrics(
@@ -213,6 +300,20 @@ class MetricWindowTests(unittest.TestCase):
         self.assertEqual(summary["gpu_count_observed"], 2)
         self.assertEqual(summary["gpu_memory_used_imbalance_mb"], 2000)
         self.assertEqual(summary["gpu_utilization_imbalance_pct"], 20)
+
+    def test_single_visible_gpu_does_not_claim_zero_imbalance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gpu.csv"
+            path.write_text(
+                "collected_at,workload,gpu_index,gpu_name,memory_used_mb,"
+                "memory_total_mb,gpu_utilization_pct\n"
+                "t,w,0,NVIDIA H100 80GB HBM3,10000,80000,80\n",
+                encoding="utf-8",
+            )
+            summary = load_gpu_summary(path, "w")
+        self.assertEqual(summary["gpu_count_observed"], 1)
+        self.assertIsNone(summary["gpu_memory_used_imbalance_mb"])
+        self.assertIsNone(summary["gpu_utilization_imbalance_pct"])
 
 
 class PrefixPromptTests(unittest.TestCase):
